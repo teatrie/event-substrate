@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: go-microservices
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: event-substrate-api-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: REDPANDA_BROKERS
+          value: "host.docker.internal:9092"
+        - name: SCHEMA_REGISTRY_URL
+          value: "http://host.docker.internal:8081"
+        - name: WEBHOOK_SECRET
+          value: "super-secret-webhook-key"
+        - name: KAFKA_SASL_MECHANISM
+          value: "SCRAM-SHA-256"
+        - name: KAFKA_SASL_USERNAME
+          value: "api-gateway"
+        - name: KAFKA_SASL_PASSWORD
+          value: "api-gateway-local-pw"
+        # NOTE: Supabase local dev uses ES256 (ECDSA) JWTs. API Gateway currently only
+        # validates HS256 (HMAC). JWT validation needs JWKS/public-key support — tracked
+        # separately. Omitting SUPABASE_JWT_SECRET to bypass signature check for now.
+        volumeMounts:
+        - name: routes-config
+          mountPath: /app/routes.yaml
+          subPath: routes.yaml
+      volumes:
+      - name: routes-config
+        configMap:
+          name: api-gateway-routes
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: go-microservices
+spec:
+  type: LoadBalancer
+  selector:
+    app: api-gateway
+  ports:
+  - port: 8080
+    targetPort: 8080

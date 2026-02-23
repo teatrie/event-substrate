@@ -1,0 +1,40 @@
+{
+  "namespace": "public.identity",
+  "type": "record",
+  "name": "SignoutEvent",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the user signing out."
+    },
+    {
+      "name": "email",
+      "type": "string",
+      "doc": "The email address of the user."
+    },
+    {
+      "name": "signout_time",
+      "type": "string",
+      "doc": "Timestamp (ISO 8601) of the signout event."
+    },
+    {
+      "name": "device_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional device identifier."
+    },
+    {
+      "name": "user_agent",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional user agent string."
+    },
+    {
+      "name": "ip_address",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional IP address of the user."
+    }
+  ]
+}

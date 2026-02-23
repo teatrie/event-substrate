@@ -1,0 +1,19 @@
+enable_sasl: true
+superusers:
+  - superuser
+cloud_storage_enabled: true
+cloud_storage_access_key: admin
+cloud_storage_secret_key: password
+cloud_storage_api_endpoint: minio
+cloud_storage_api_endpoint_port: 9000
+cloud_storage_region: local
+cloud_storage_bucket: redpanda
+cloud_storage_disable_tls: true
+cloud_storage_url_style: path
+cloud_storage_cache_size: 10737418240
+iceberg_enabled: true
+iceberg_catalog_commit_interval_ms: 10000
+iceberg_catalog_type: rest
+iceberg_rest_catalog_endpoint: http://nessie:19120/iceberg
+iceberg_rest_catalog_client_id: dummy
+iceberg_rest_catalog_client_secret: dummy

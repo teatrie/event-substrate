@@ -1,0 +1,40 @@
+{
+  "namespace": "public.identity",
+  "type": "record",
+  "name": "LoginEvent",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the user logging in."
+    },
+    {
+      "name": "email",
+      "type": "string",
+      "doc": "The email address used for login."
+    },
+    {
+      "name": "login_time",
+      "type": "string",
+      "doc": "Timestamp (ISO 8601) of the login event."
+    },
+    {
+      "name": "device_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional generic identifier for the device."
+    },
+    {
+      "name": "user_agent",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional User-Agent string from the login request header."
+    },
+    {
+      "name": "ip_address",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional IP address from the login request header."
+    }
+  ]
+}

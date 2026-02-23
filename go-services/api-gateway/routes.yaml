@@ -1,0 +1,10 @@
+webhookRoutes:
+  login: public.identity.login.events
+  signup: public.identity.signup.events
+  signout: public.identity.signout.events
+
+externalRoutes:
+  message: public.user.message.events
+  # Examples of future frontend events
+  # click: ClickEvent
+  # pageview: PageViewEvent

@@ -1,0 +1,22 @@
+# Node
+node_modules/
+.npm/
+*.log
+
+# Build tools
+.task/
+
+# Go
+bin/
+api-gateway-test
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment/Secrets
+.env
+
+# OS
+.DS_Store

@@ -1,0 +1,351 @@
+version: '3'
+
+vars:
+  GATEWAY_IMAGE: event-substrate-api-gateway:latest
+  CONSUMER_IMAGE: event-substrate-message-consumer:latest
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # Prerequisites
+  # ---------------------------------------------------------------------------
+  prereqs:
+    desc: Check and install required CLI tools
+    cmds:
+      - |
+        if ! command -v brew &> /dev/null; then
+          echo "❌ Homebrew is required but not installed." && exit 1
+        fi
+        for tool in jq helm supabase kubectl; do
+          if ! command -v $tool &> /dev/null; then
+            case $tool in
+              supabase) brew install supabase/tap/supabase ;;
+              *) brew install $tool ;;
+            esac
+          fi
+        done
+
+  # ---------------------------------------------------------------------------
+  # Build (change-detected)
+  # ---------------------------------------------------------------------------
+  build:gateway:
+    desc: Build API Gateway Docker image
+    sources:
+      - go-services/api-gateway/*.go
+      - go-services/api-gateway/go.*
+      - go-services/api-gateway/Dockerfile
+    cmds:
+      - docker build -t {{.GATEWAY_IMAGE}} ./go-services/api-gateway
+
+  build:consumer:
+    desc: Build Message Consumer Docker image
+    sources:
+      - go-services/message-consumer/*.go
+      - go-services/message-consumer/go.*
+      - go-services/message-consumer/Dockerfile
+    cmds:
+      - docker build -t {{.CONSUMER_IMAGE}} ./go-services/message-consumer
+
+  build:
+    desc: Build all Go service images (only if source changed)
+    deps: [build:gateway, build:consumer]
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  infra:supabase:
+    desc: Start Supabase (Postgres, GoTrue, Realtime)
+    cmds:
+      - supabase start
+
+  infra:docker:
+    desc: Start Docker Compose infrastructure
+    cmds:
+      - docker compose up -d --build
+
+  wait:schema-registry:
+    desc: Wait for Schema Registry to be healthy
+    cmds:
+      - |
+        echo "⏳ Waiting for Schema Registry..."
+        max_retries=30; count=0
+        while ! curl -s http://localhost:8081 > /dev/null; do
+          count=$((count + 1))
+          if [ $count -gt $max_retries ]; then
+            echo "❌ Schema Registry failed to start in time." && exit 1
+          fi
+          sleep 2
+        done
+
+  wait:clickhouse:
+    desc: Wait for ClickHouse to be healthy
+    cmds:
+      - |
+        echo "⏳ Waiting for ClickHouse..."
+        max_retries=30; count=0
+        while ! curl -s "http://localhost:8123/ping" > /dev/null; do
+          count=$((count + 1))
+          if [ $count -gt $max_retries ]; then
+            echo "❌ ClickHouse failed to start in time." && exit 1
+          fi
+          sleep 2
+        done
+
+  # ---------------------------------------------------------------------------
+  # Authentication (idempotent)
+  # ---------------------------------------------------------------------------
+  auth:setup:
+    desc: Create Redpanda SASL users and ACLs (idempotent, runs from host)
+    cmds:
+      - bash scripts/setup-redpanda-auth.sh
+
+  # ---------------------------------------------------------------------------
+  # Schemas & Topics (idempotent)
+  # ---------------------------------------------------------------------------
+  schemas:register:
+    desc: Auto-discover and register all Avro schemas from avro/ directory
+    sources:
+      - avro/**/*.avsc
+    cmds:
+      - |
+        find avro -name "*.avsc" -type f | while read -r schema_file; do
+          topic=$(echo "$schema_file" | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
+          subject="${topic}-value"
+          SCHEMA=$(jq -c '.' "$schema_file" | jq -Rs '.')
+          RESPONSE=$(curl -s -o /dev/stderr -w "%{http_code}" -X POST \
+            "http://localhost:8081/subjects/${subject}/versions" \
+            -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+            -d "{\"schema\": $SCHEMA, \"schemaType\": \"AVRO\"}")
+          if [ "$RESPONSE" -ne 200 ]; then
+            echo "❌ ${subject} failed with HTTP $RESPONSE" && exit 1
+          fi
+          echo "  ✅ ${subject}"
+        done
+      - |
+        curl -s -o /dev/null -X PUT \
+          http://localhost:8081/config/internal.platform.unified.events-value \
+          -H "Content-Type: application/json" \
+          -d '{"compatibility": "NONE"}'
+
+  topics:create:
+    desc: Create Kafka topics and enable Iceberg (auto-discovered from avro/)
+    sources:
+      - avro/**/*.avsc
+    cmds:
+      - |
+        SU="--user superuser --password superuser-local-pw --sasl-mechanism SCRAM-SHA-256"
+        TOPICS=$(find avro -name "*.avsc" -type f | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
+        docker exec redpanda rpk topic create $TOPICS $SU || true
+        for topic in $TOPICS; do
+          docker exec redpanda rpk topic alter-config "$topic" \
+            --set redpanda.iceberg.mode=value_schema_id_prefix $SU
+        done
+
+  # ---------------------------------------------------------------------------
+  # ClickHouse
+  # ---------------------------------------------------------------------------
+  clickhouse:init:
+    desc: Initialize ClickHouse tables and materialized views
+    sources:
+      - clickhouse/init.sql
+    cmds:
+      - task: wait:clickhouse
+      - docker exec -i clickhouse clickhouse-client -n < clickhouse/init.sql
+      - echo "✅ ClickHouse initialized."
+
+  # ---------------------------------------------------------------------------
+  # Kubernetes
+  # ---------------------------------------------------------------------------
+  k8s:operators:
+    desc: Install Flink Operator and KEDA
+    cmds:
+      - helm repo add flink-operator-repo https://downloads.apache.org/flink/flink-kubernetes-operator-1.14.0/ || true
+      - helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator --set webhook.create=false || echo "Flink Operator already installed."
+      - kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
+      - helm repo add kedacore https://kedacore.github.io/charts || true
+      - helm install keda kedacore/keda --namespace keda || echo "KEDA already installed."
+      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -
+
+  k8s:configmaps:
+    desc: Create Flink ConfigMaps from SQL/Python sources
+    sources:
+      - flink_jobs/*.sql
+      - flink_jobs/sql_runner.py
+      - pyflink_jobs/echo_processor.py
+    cmds:
+      - kubectl create serviceaccount flink --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap flink-sql-scripts
+        --from-file=login_events_processor.sql=flink_jobs/login_events_processor.sql
+        --from-file=signup_events_processor.sql=flink_jobs/signup_events_processor.sql
+        --from-file=signout_events_processor.sql=flink_jobs/signout_events_processor.sql
+        --from-file=unified_events_processor.sql=flink_jobs/unified_events_processor.sql
+        --from-file=sql_runner.py=flink_jobs/sql_runner.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap pyflink-echo-scripts
+        --from-file=echo_processor.py=pyflink_jobs/echo_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+
+  k8s:flink:
+    desc: Deploy Flink jobs to Kubernetes
+    deps: [k8s:configmaps]
+    cmds:
+      - kubectl apply -f kubernetes/flink-deployment.yaml
+      - kubectl apply -f kubernetes/pyflink-deployment.yaml
+
+  k8s:go-services:
+    desc: Build and deploy Go microservices to Kubernetes
+    deps: [build]
+    sources:
+      - go-services/api-gateway/routes.yaml
+      - kubernetes/go-services/*.yaml
+    cmds:
+      - kubectl create configmap api-gateway-routes --from-file=routes.yaml=go-services/api-gateway/routes.yaml -n go-microservices --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f kubernetes/go-services/
+
+  # ---------------------------------------------------------------------------
+  # Composite Workflows
+  # ---------------------------------------------------------------------------
+  init:
+    desc: First-time full platform setup
+    cmds:
+      - task: prereqs
+      - task: infra:supabase
+      - task: infra:docker
+      - task: auth:setup
+      - task: wait:schema-registry
+      - task: schemas:register
+      - task: topics:create
+      - task: k8s:operators
+      - task: k8s:flink
+      - task: k8s:go-services
+      - task: clickhouse:init
+      - echo "🎉 Initialization Complete!"
+      - echo "Supabase Studio{{":"}} http://127.0.0.1:54323"
+      - echo "MinIO Console{{":"}}   http://127.0.0.1:9001 (admin/password)"
+      - echo "----------------------------------------------------------"
+      - echo "🔑 Supabase Anon Key (for frontend/.env){{":"}}"
+      - supabase status -o json | jq -r .anon_key
+      - echo "----------------------------------------------------------"
+
+  start:
+    desc: Start platform (rebuilds only changed Go services)
+    cmds:
+      - task: infra:supabase
+      - task: infra:docker
+      - task: auth:setup
+      - task: wait:schema-registry
+      - task: k8s:configmaps
+      - task: k8s:flink
+      - task: k8s:go-services
+      - task: clickhouse:init
+      - echo "✅ Platform is up and running!"
+      - echo "Supabase Studio{{":"}} http://127.0.0.1:54323"
+      - echo "MinIO Console{{":"}}   http://127.0.0.1:9001 (admin/password)"
+
+  shutdown:
+    desc: Stop everything
+    cmds:
+      - echo "🛑 Shutting down Event-Driven Substrate..."
+      - kubectl delete -f kubernetes/go-services/ -n go-microservices --ignore-not-found || true
+      - kubectl delete -f kubernetes/flink-deployment.yaml --ignore-not-found
+      - kubectl delete -f kubernetes/pyflink-deployment.yaml --ignore-not-found
+      - docker compose down
+      - supabase stop
+      - echo "✅ Shutdown complete."
+
+  # ---------------------------------------------------------------------------
+  # E2E Testing
+  # ---------------------------------------------------------------------------
+  test:e2e:install:
+    desc: Install E2E test dependencies
+    dir: tests/e2e
+    sources:
+      - package.json
+    cmds:
+      - npm install
+
+  test:e2e:
+    desc: Run all end-to-end pipeline tests against user_notifications
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - bash run_all.sh
+
+  test:e2e:signup:
+    desc: Test signup → user_notifications flow
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_signup_flow.mjs
+
+  test:e2e:login:
+    desc: Test login → user_notifications flow
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_login_flow.mjs
+
+  test:e2e:signout:
+    desc: Test signout → user_notifications flow
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_signout_flow.mjs
+
+  test:e2e:message:
+    desc: Test message POST → user_notifications flow
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_message_flow.mjs
+
+  test:e2e:rls:
+    desc: Test RLS isolation — users cannot see other users' identity events
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_rls_isolation.mjs
+
+  # ---------------------------------------------------------------------------
+  # Utility
+  # ---------------------------------------------------------------------------
+  status:
+    desc: Show status of all services
+    cmds:
+      - echo "--- Supabase ---"
+      - supabase status || true
+      - echo ""
+      - echo "--- Docker Compose ---"
+      - docker compose ps
+      - echo ""
+      - echo "--- Kubernetes ---"
+      - kubectl get pods -A --no-headers 2>/dev/null || echo "No K8s pods found"
+
+  frontend:
+    desc: Install dependencies and start the Vite frontend dev server
+    dir: frontend
+    cmds:
+      - npm install
+      - npm run dev
+
+  logs:gateway:
+    desc: Tail API Gateway logs
+    cmds:
+      - kubectl logs -f -l app=api-gateway -n go-microservices
+
+  logs:consumer:
+    desc: Tail Message Consumer logs
+    cmds:
+      - kubectl logs -f -l app=message-consumer -n go-microservices
+
+  logs:flink:
+    desc: Tail Flink job logs
+    cmds:
+      - kubectl logs -f -l app=login-events-processor --all-containers
+
+  clean:
+    desc: Remove build checksums (forces full rebuild on next run)
+    cmds:
+      - rm -rf .task/
+      - echo "✅ Build cache cleared."

@@ -1,0 +1,150 @@
+graph TD
+    %% Define styles for different components
+    classDef frontend fill:#3b82f6,color:#fff,stroke:#1d4ed8,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef olap fill:#f97316,color:#fff,stroke:#c2410c,stroke-width:2px
+    classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
+    classDef telemetry fill:#ec4899,color:#fff,stroke:#be185d,stroke-width:2px
+    classDef auth fill:#dc2626,color:#fff,stroke:#991b1b,stroke-width:3px
+
+    subgraph "User Layer"
+        WebUI["Vite Frontend"]:::frontend
+    end
+
+    subgraph "Auth & Core Operations"
+        Supabase[("Supabase\nPostgreSQL & Auth")]:::db
+        UserNotifs[("user_notifications\n(Unified Egress)")]:::db
+    end
+
+    WebUI -.->|"1. Authentication"| Supabase
+    Supabase -->|"2. pg_net webhooks\nPOST /webhooks/{topic}\n(X-Webhook-Secret)"| API
+    WebUI -->|"3. Direct Client Ingress\nPOST /api/v1/events/{topic}\n(JWT Bearer)"| API
+    UserNotifs -.->|"Supabase Realtime\n(Single Subscription)"| WebUI
+
+    subgraph "Kubernetes: go-microservices Namespace"
+        API["Go API Gateway\n(api-gateway)"]:::gateway
+        ConfigMap["ConfigMap\n(routes.yaml)"]:::registry
+        GoMessageConsumer["Go Consumer:\nmessage-consumer"]:::stream
+        KEDA["KEDA Autoscaler\n(ScaledObject)"]:::telemetry
+    end
+    API <-->|"Fetch Avro Schemas"| SchemaReg
+    ConfigMap -.->|"fsnotify\n(Zero-Downtime Hot-Reload)"| API
+    KEDA -.->|"Watch Kafka Lag\n(Threshold: 5)"| TopicMessage
+    KEDA -->|"Auto-Scale Pods"| GoMessageConsumer
+
+    subgraph "Data Lake (Iceberg)"
+        Nessie["Project Nessie\n(REST Catalog)"]:::registry
+        MinIO[("MinIO\n(S3 Object Storage)")]:::db
+    end
+
+    subgraph "Message Broker (Redpanda · SASL/SCRAM-SHA-256)"
+        Redpanda["Redpanda Broker\n(enable_sasl: true)"]:::broker
+        AuthInit["redpanda-auth-init\n(Bootstrap Users & ACLs)"]:::auth
+        SchemaReg["Schema Registry\n🔑 schema-admin"]:::registry
+        subgraph "Public Topics (public.*)"
+            TopicLogin("public.identity.login.events"):::broker
+            TopicSignup("public.identity.signup.events"):::broker
+            TopicSignout("public.identity.signout.events"):::broker
+            TopicMessage("public.user.message.events"):::broker
+        end
+        subgraph "Internal Topics (internal.*)"
+            TopicUnified("internal.platform.unified.events"):::broker
+            TopicPy("internal.identity.login.echo"):::broker
+        end
+    end
+
+    %% Auth bootstrap chain
+    AuthInit -.->|"Admin API :9644\nCreate SCRAM Users + ACLs"| SchemaReg
+
+    %% Data entering the broker (SASL: api-gateway — Write public.*)
+    API -->|"🔑 api-gateway\nProduce Avro"| TopicLogin
+    API -->|"🔑 api-gateway\nProduce Avro"| TopicSignup
+    API -->|"🔑 api-gateway\nProduce Avro"| TopicSignout
+    API -->|"🔑 api-gateway\nProduce Avro"| TopicMessage
+
+    subgraph "Kubernetes: default Namespace"
+        subgraph "Stream Processing Pipeline (🔑 flink-processor)"
+            FlinkLogin["Flink SQL:\nlogin_events_processor"]:::stream
+            FlinkSignup["Flink SQL:\nsignup_events_processor"]:::stream
+            FlinkSignout["Flink SQL:\nsignout_events_processor"]:::stream
+            FlinkUnion["Flink SQL:\nunified_events_processor"]:::stream
+            PyFlinkEcho["PyFlink:\necho_processor"]:::stream
+        end
+    end
+
+    %% Routing to processors (SASL: flink-processor — Read public.*, Read/Write internal.*)
+    TopicLogin -->|"Consume Avro"| FlinkLogin
+    TopicSignup -->|"Consume Avro"| FlinkSignup
+    TopicSignout -->|"Consume Avro"| FlinkSignout
+
+    TopicLogin -->|"Consume Avro"| FlinkUnion
+    TopicSignup -->|"Consume Avro"| FlinkUnion
+    TopicSignout -->|"Consume Avro"| FlinkUnion
+
+    TopicLogin -->|"Consume Avro"| PyFlinkEcho
+
+    TopicMessage -->|"🔑 message-consumer\ntwmb/franz-go"| GoMessageConsumer
+
+    %% Output from processors
+    FlinkUnion -->|"UNION ALL\nProduce unified Avro"| TopicUnified
+    PyFlinkEcho -->|"Produce Avro"| TopicPy
+
+    %% Iceberg Materialization (Tiered Storage)
+    TopicLogin -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicSignup -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicSignout -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicUnified -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicPy -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicMessage -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    Nessie -->|"Manage Metadata & Data"| MinIO
+
+    %% Processors write to unified notifications only
+    FlinkLogin -->|"INSERT JDBC\n(identity.login)"| UserNotifs
+    FlinkSignup -->|"INSERT JDBC\n(identity.signup)"| UserNotifs
+    FlinkSignout -->|"INSERT JDBC\n(identity.signout)"| UserNotifs
+    GoMessageConsumer -->|"lib/pq INSERT\n(user.message)"| UserNotifs
+
+    subgraph "Real-Time OLAP (🔑 clickhouse-consumer)"
+        CHKafka["Kafka Table Engine"]:::olap
+        CHMV["Materialized View"]:::olap
+        CHMergeTree[("ReplacingMergeTree Table\n(unified_events)")]:::olap
+
+        CHKafka -->|"Pipe records"| CHMV
+        CHMV -->|"Insert"| CHMergeTree
+    end
+
+    %% Into Clickhouse (SASL: clickhouse-consumer — Read internal.*)
+    TopicUnified -->|"🔑 clickhouse-consumer\nConsume Avro"| CHKafka
+    CHKafka <-->|"Fetch Schemas"| SchemaReg
+
+    subgraph "Observability Stack"
+        OTel["OpenTelemetry Collector"]:::telemetry
+        Prometheus[("Prometheus")]:::telemetry
+        Loki[("Loki (Logs)")]:::telemetry
+        Jaeger["Jaeger (Tracing)"]:::telemetry
+        Grafana["Grafana Dashboard"]:::telemetry
+
+        OTel -->|"Metrics"| Prometheus
+        OTel -->|"Logs"| Loki
+        OTel -->|"Traces"| Jaeger
+        Prometheus --> Grafana
+        Loki --> Grafana
+        Jaeger --> Grafana
+    end
+
+    %% Telemetry reporting
+    API -.->|"OTLP Metrics"| OTel
+    FlinkLogin -.->|"StatsD"| OTel
+    FlinkSignup -.->|"StatsD"| OTel
+    FlinkSignout -.->|"StatsD"| OTel
+    FlinkUnion -.->|"StatsD"| OTel
+
+    %% Bootstrap dependency chain
+    AuthInit -.->|"depends_on\n(service_healthy)"| Redpanda
+    SchemaReg -.->|"depends_on\n(auth-init completed)"| AuthInit
+    CHKafka -.->|"depends_on"| Redpanda
+    Redpanda -.->|"depends_on"| MinIO
+    Redpanda -.->|"depends_on"| Nessie

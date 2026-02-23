@@ -1,0 +1,86 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: login-events-processor
+  namespace: default
+spec:
+  image: pyflink-custom:1.18.0
+  imagePullPolicy: IfNotPresent
+  flinkVersion: v1_18
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    metrics.reporter.stsd.class: org.apache.flink.metrics.statsd.StatsDReporter
+    metrics.reporter.stsd.host: host.docker.internal
+    metrics.reporter.stsd.port: "8125"
+    pipeline.jars: "file:///opt/flink/usrlib/postgresql-42.7.2.jar;file:///opt/flink/usrlib/flink-connector-jdbc-3.1.2-1.18.jar;file:///opt/flink/usrlib/flink-sql-connector-kafka-3.0.1-1.18.jar;file:///opt/flink/usrlib/flink-sql-avro-confluent-registry-1.18.0.jar;file:///opt/flink/usrlib/kafka-schema-registry-client-7.6.0.jar;file:///opt/flink/usrlib/flink-avro-1.18.0.jar;file:///opt/flink/usrlib/iceberg-flink-runtime-1.18-1.5.0.jar;file:///opt/flink/usrlib/flink-s3-fs-hadoop-1.18.0.jar"
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1024m"
+      cpu: 1
+  taskManager:
+    resource:
+      memory: "1024m"
+      cpu: 1
+  podTemplate:
+    spec:
+      initContainers:
+        - name: fetch-dependencies
+          image: curlimages/curl:latest
+          command:
+            - "sh"
+            - "-c"
+            - "curl -L -o /opt/flink/usrlib/postgresql-42.7.2.jar https://jdbc.postgresql.org/download/postgresql-42.7.2.jar && curl -L -o /opt/flink/usrlib/flink-connector-jdbc-3.1.2-1.18.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-connector-jdbc/3.1.2-1.18/flink-connector-jdbc-3.1.2-1.18.jar && curl -L -o /opt/flink/usrlib/flink-sql-connector-kafka-3.0.1-1.18.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.0.1-1.18/flink-sql-connector-kafka-3.0.1-1.18.jar && curl -L -o /opt/flink/usrlib/flink-sql-avro-confluent-registry-1.18.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-avro-confluent-registry/1.18.0/flink-sql-avro-confluent-registry-1.18.0.jar && curl -L -o /opt/flink/usrlib/kafka-schema-registry-client-7.6.0.jar https://packages.confluent.io/maven/io/confluent/kafka-schema-registry-client/7.6.0/kafka-schema-registry-client-7.6.0.jar && curl -L -o /opt/flink/usrlib/flink-avro-1.18.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-avro/1.18.0/flink-avro-1.18.0.jar && curl -L -o /opt/flink/usrlib/iceberg-flink-runtime-1.18-1.5.0.jar https://repo.maven.apache.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.18/1.5.0/iceberg-flink-runtime-1.18-1.5.0.jar && curl -L -o /opt/flink/usrlib/flink-s3-fs-hadoop-1.18.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-s3-fs-hadoop/1.18.0/flink-s3-fs-hadoop-1.18.0.jar && cp /opt/flink/opt/flink-metrics-statsd-*.jar /opt/flink/usrlib/ || true"
+          volumeMounts:
+            - name: usrlib-volume
+              mountPath: /opt/flink/usrlib
+      containers:
+        - name: flink-main-container
+          env:
+            - name: REDPANDA_BROKERS
+              value: "host.docker.internal:9092"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://host.docker.internal:8081"
+            - name: SUPABASE_DB_JDBC_URL
+              value: "jdbc:postgresql://host.docker.internal:54322/postgres"
+            - name: SUPABASE_DB_USER
+              value: "postgres"
+            - name: SUPABASE_DB_PASSWORD
+              value: "postgres"
+            - name: OTEL_COLLECTOR_HOST
+              value: "host.docker.internal"
+            - name: ICEBERG_REST_CATALOG_ENDPOINT
+              value: "http://host.docker.internal:19120/iceberg"
+            - name: S3_ENDPOINT
+              value: "http://host.docker.internal:9000"
+            - name: S3_ACCESS_KEY
+              value: "admin"
+            - name: S3_SECRET_KEY
+              value: "password"
+            - name: S3_BUCKET
+              value: "redpanda"
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: KAFKA_SASL_MECHANISM
+              value: "SCRAM-SHA-256"
+            - name: KAFKA_SASL_USERNAME
+              value: "flink-processor"
+            - name: KAFKA_SASL_PASSWORD
+              value: "flink-processor-local-pw"
+          volumeMounts:
+            - name: sql-scripts
+              mountPath: /opt/flink/sql-scripts
+            - name: usrlib-volume
+              mountPath: /opt/flink/usrlib
+      volumes:
+        - name: sql-scripts
+          configMap:
+            name: flink-sql-scripts
+        - name: usrlib-volume
+          emptyDir: {}
+  job:
+    jarURI: local:///opt/flink/opt/flink-python_2.12-1.18.0.jar
+    entryClass: "org.apache.flink.client.python.PythonGatewayServer"
+    args: ["-py", "/opt/flink/sql-scripts/sql_runner.py", "/opt/flink/sql-scripts/login_events_processor.sql", "/opt/flink/sql-scripts/signup_events_processor.sql", "/opt/flink/sql-scripts/signout_events_processor.sql", "/opt/flink/sql-scripts/unified_events_processor.sql"]
+    parallelism: 1
+    upgradeMode: stateless

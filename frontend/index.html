@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stream Platform Base</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+  <div class="container">
+
+    <!-- Authentication View -->
+    <div id="auth-view" class="active-view">
+      <div class="header">
+        <h1 class="title" id="form-title">Welcome back</h1>
+        <p class="subtitle" id="form-subtitle">Enter your details to log in to your account</p>
+      </div>
+
+      <div id="alert-box" class="alert"></div>
+
+      <form id="auth-form">
+        <div class="form-group">
+          <label class="form-label">Email address</label>
+          <input type="email" id="email" class="form-input" placeholder="name@example.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="password" class="form-input" placeholder="••••••••" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="submit-btn">Log In</button>
+      </form>
+
+      <p class="toggle-text">
+        <span id="toggle-prompt">Don't have an account?</span>
+        <span class="toggle-link" id="toggle-mode">Sign up</span>
+      </p>
+    </div>
+
+    <!-- Authenticated Home View -->
+    <div id="home-view">
+      <div class="header">
+        <h1 class="title" id="welcome-message">Hello User!</h1>
+        <p class="subtitle">You are successfully authenticated.</p>
+      </div>
+
+      <div class="message-pane" style="margin-bottom: 2rem;">
+        <form id="message-form" style="display: flex; gap: 10px;">
+          <input type="text" id="message-input" class="form-input" placeholder="Broadcast a public message..."
+            style="flex-grow: 1;" required>
+          <button type="submit" class="btn btn-primary" id="send-message-btn" style="width: auto;">Send</button>
+        </form>
+      </div>
+
+      <div class="notifications-pane">
+        <h3 class="notifications-title">Live Events</h3>
+        <ul id="notifications-list" class="notifications-list">
+          <li id="notification-empty" class="notification-empty">No events received yet.</li>
+        </ul>
+      </div>
+
+      <button id="logout-btn" class="btn btn-secondary">Sign Out</button>
+    </div>
+
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+
+</html>

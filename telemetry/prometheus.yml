@@ -1,0 +1,6 @@
+global:
+  scrape_interval: 15s
+
+# Enable OTel remote write
+remote_write: []
+# No scrape configs needed because OTel pushes to it

@@ -1,0 +1,22 @@
+{
+  "namespace": "public.identity",
+  "type": "record",
+  "name": "SignupEvent",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the user signing up."
+    },
+    {
+      "name": "email",
+      "type": "string",
+      "doc": "The email address used for signup."
+    },
+    {
+      "name": "signup_time",
+      "type": "string",
+      "doc": "Timestamp (ISO 8601) of the signup event."
+    }
+  ]
+}

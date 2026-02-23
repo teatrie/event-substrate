@@ -1,0 +1,39 @@
+{
+  "type": "record",
+  "name": "UserMessageEvent",
+  "namespace": "public.user.message",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "UUID of the user who submitted the message"
+    },
+    {
+      "name": "email",
+      "type": "string",
+      "doc": "Email address of the user"
+    },
+    {
+      "name": "message",
+      "type": "string",
+      "doc": "The text content submitted by the user"
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "doc": "ISO8601 timestamp of when the message was submitted"
+    },
+    {
+      "name": "visibility",
+      "type": "string",
+      "default": "broadcast",
+      "doc": "Message visibility: 'broadcast' (all users) or 'direct' (sender + recipient only)"
+    },
+    {
+      "name": "recipient_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "UUID of the target user for direct messages. Null for broadcast."
+    }
+  ]
+}

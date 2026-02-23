@@ -1,0 +1,8 @@
+<clickhouse>
+    <kafka>
+        <security_protocol>SASL_PLAINTEXT</security_protocol>
+        <sasl_mechanism>SCRAM-SHA-256</sasl_mechanism>
+        <sasl_username>clickhouse-consumer</sasl_username>
+        <sasl_password>clickhouse-local-pw</sasl_password>
+    </kafka>
+</clickhouse>

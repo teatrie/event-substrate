@@ -1,0 +1,17 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: message-consumer-scaledobject
+  namespace: go-microservices
+spec:
+  scaleTargetRef:
+    name: message-consumer
+  minReplicaCount: 1
+  maxReplicaCount: 15
+  triggers:
+  - type: kafka
+    metadata:
+      bootstrapServers: host.docker.internal:9092
+      consumerGroup: go-message-consumer
+      topic: public.user.message.events
+      lagThreshold: "5"

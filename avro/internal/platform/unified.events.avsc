@@ -1,0 +1,15 @@
+{
+  "namespace": "platform.events",
+  "type": "record",
+  "name": "PlatformEvent",
+  "fields": [
+    { "name": "event_id", "type": "string" },
+    { "name": "event_time", "type": "string" },
+    { "name": "event_type", "type": "string" },
+    { "name": "user_id", "type": "string" },
+    { "name": "email", "type": "string" },
+    { "name": "device_id", "type": ["null", "string"], "default": null },
+    { "name": "user_agent", "type": ["null", "string"], "default": null },
+    { "name": "ip_address", "type": ["null", "string"], "default": null }
+  ]
+}
