@@ -32,9 +32,22 @@ spec:
           value: "api-gateway"
         - name: KAFKA_SASL_PASSWORD
           value: "api-gateway-local-pw"
-        # NOTE: Supabase local dev uses ES256 (ECDSA) JWTs. API Gateway currently only
-        # validates HS256 (HMAC). JWT validation needs JWKS/public-key support — tracked
-        # separately. Omitting SUPABASE_JWT_SECRET to bypass signature check for now.
+        # Supabase JWT verification (ES256 via JWKS, HS256 via secret as fallback)
+        - name: SUPABASE_JWKS_URL
+          value: "http://host.docker.internal:54321/auth/v1/.well-known/jwks.json"
+        - name: SUPABASE_JWT_SECRET
+          value: "super-secret-jwt-token-with-at-least-32-characters-long"
+        # Upload handler: MinIO + Postgres for credit checks and presigned URLs
+        - name: SUPABASE_DB_URL
+          value: "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+        - name: MINIO_ENDPOINT
+          value: "host.docker.internal:9000"
+        - name: MINIO_ACCESS_KEY
+          value: "admin"
+        - name: MINIO_SECRET_KEY
+          value: "password"
+        - name: MINIO_BUCKET
+          value: "media-uploads"
         volumeMounts:
         - name: routes-config
           mountPath: /app/routes.yaml
