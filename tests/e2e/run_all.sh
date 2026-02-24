@@ -31,6 +31,8 @@ TESTS=(
   test_signout_flow.mjs
   test_message_flow.mjs
   test_rls_isolation.mjs
+  test_credit_economy.mjs
+  test_media_upload.mjs
 )
 
 PASSED=0

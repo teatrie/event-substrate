@@ -71,11 +71,55 @@ export async function waitForNotification(userId, eventType, { timeoutMs = 30000
 }
 
 /**
- * Clean up test notifications for a user.
+ * Poll a table until a matching row appears or timeout.
+ * Generic version of waitForNotification for any table.
+ */
+export async function waitForRow(table, filters, { timeoutMs = 30000, pollMs = 1000 } = {}) {
+  const client = adminClient || supabase
+  const start = Date.now()
+
+  while (Date.now() - start < timeoutMs) {
+    let query = client.from(table).select('*')
+    for (const [col, val] of Object.entries(filters)) {
+      query = query.eq(col, val)
+    }
+    query = query.order('created_at', { ascending: false }).limit(1)
+
+    const { data, error } = await query
+    if (error) throw new Error(`Query ${table} failed: ${error.message}`)
+    if (data && data.length > 0) return data[0]
+
+    await sleep(pollMs)
+  }
+
+  throw new Error(`Timed out waiting for row in ${table} matching ${JSON.stringify(filters)} after ${timeoutMs}ms`)
+}
+
+/**
+ * Query the user_credit_balances view for a user's current balance.
+ * Returns the balance (number) or null if no row exists.
+ */
+export async function getCreditBalance(userId) {
+  const client = adminClient || supabase
+  const { data, error } = await client
+    .from('user_credit_balances')
+    .select('balance')
+    .eq('user_id', userId)
+    .limit(1)
+
+  if (error) throw new Error(`Credit balance query failed: ${error.message}`)
+  if (!data || data.length === 0) return null
+  return data[0].balance
+}
+
+/**
+ * Clean up all test data for a user (notifications, credits, media files, auth).
  */
 export async function cleanupUser(userId) {
   if (!adminClient) return
   await adminClient.from('user_notifications').delete().eq('user_id', userId)
+  await adminClient.from('credit_ledger').delete().eq('user_id', userId)
+  await adminClient.from('media_files').delete().eq('user_id', userId)
   await adminClient.auth.admin.deleteUser(userId)
 }
 
@@ -112,6 +156,8 @@ export async function cleanupStaleTestData() {
   console.log(`  Cleaning up ${staleUsers.length} stale test user(s)...`)
   for (const u of staleUsers) {
     await adminClient.from('user_notifications').delete().eq('user_id', u.id)
+    await adminClient.from('credit_ledger').delete().eq('user_id', u.id)
+    await adminClient.from('media_files').delete().eq('user_id', u.id)
     await adminClient.auth.admin.deleteUser(u.id)
   }
 }
