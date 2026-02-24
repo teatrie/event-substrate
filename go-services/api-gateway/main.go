@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,14 +40,75 @@ type Config struct {
 }
 
 var (
-	appConfig     Config
-	configMu      sync.RWMutex
-	schemaCache   sync.Map
-	srClient      *sr.Client
-	kafkaClient   *kgo.Client
-	jwtSecret     []byte
-	webhookSecret string
+	appConfig      Config
+	configMu       sync.RWMutex
+	schemaCache    sync.Map
+	srClient       *sr.Client
+	kafkaClient    *kgo.Client
+	jwtSecret      []byte
+	ecdsaPublicKey *ecdsa.PublicKey
+	webhookSecret  string
 )
+
+// fetchJWKS fetches the JWKS from a Supabase auth endpoint and extracts the EC public key.
+func fetchJWKS(jwksURL string) (*ecdsa.PublicKey, error) {
+	resp, err := http.Get(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Crv string `json:"crv"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+			Alg string `json:"alg"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
+	}
+
+	for _, key := range jwks.Keys {
+		if key.Kty == "EC" && key.Crv == "P-256" {
+			xBytes, err := base64.RawURLEncoding.DecodeString(key.X)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode JWKS x coordinate: %w", err)
+			}
+			yBytes, err := base64.RawURLEncoding.DecodeString(key.Y)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode JWKS y coordinate: %w", err)
+			}
+			return &ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+				X:     new(big.Int).SetBytes(xBytes),
+				Y:     new(big.Int).SetBytes(yBytes),
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("no EC P-256 key found in JWKS")
+}
+
+// jwtKeyFunc returns the appropriate verification key based on the token's signing method.
+// Supports both HS256 (HMAC) and ES256 (ECDSA) to handle varying Supabase JWT configurations.
+func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
+	switch token.Method.(type) {
+	case *jwt.SigningMethodHMAC:
+		if len(jwtSecret) == 0 {
+			return nil, fmt.Errorf("HMAC JWT secret not configured")
+		}
+		return jwtSecret, nil
+	case *jwt.SigningMethodECDSA:
+		if ecdsaPublicKey == nil {
+			return nil, fmt.Errorf("ECDSA public key not configured")
+		}
+		return ecdsaPublicKey, nil
+	default:
+		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	}
+}
 
 func loadConfig() {
 	viper.SetConfigName("routes")
@@ -107,6 +172,30 @@ func fetchAndCacheSchema(ctx context.Context, topic string) (*CachedSchema, erro
 	return cached, nil
 }
 
+// convertJSONNumbers recursively converts json.Number values to native Go int64/float64
+// for compatibility with hamba/avro, which requires native types for Avro encoding.
+func convertJSONNumbers(m map[string]any) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case json.Number:
+			// Try int64 first (for Avro "int" and "long" fields), fall back to float64
+			if i, err := val.Int64(); err == nil {
+				m[k] = i
+			} else if f, err := val.Float64(); err == nil {
+				m[k] = f
+			}
+		case map[string]any:
+			convertJSONNumbers(val)
+		case []any:
+			for _, item := range val {
+				if nested, ok := item.(map[string]any); ok {
+					convertJSONNumbers(nested)
+				}
+			}
+		}
+	}
+}
+
 // encodeAvro dynamically serializes an unstructured map[string]any against the retrieved Avro Schema structure, prepending the 5-byte Confluent Wire Format headers.
 func encodeAvro(schemaID int, avroSchema avro.Schema, v any) ([]byte, error) {
 	avroBytes, err := avro.Marshal(avroSchema, v)
@@ -138,13 +227,21 @@ func processAndProduceEvent(ctx context.Context, w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Attempt to deserialize the raw incoming Request directly into an unstructured slice
+	// Attempt to deserialize the raw incoming Request directly into an unstructured map.
+	// UseNumber() preserves numeric types as json.Number instead of float64,
+	// which we then convert to native Go int64/float64 for the Avro encoder.
 	var event map[string]any
-	if err := json.Unmarshal(bodyBytes, &event); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(bodyBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&event); err != nil {
 		log.Printf("Invalid JSON formatting for topic '%s': %v", topicName, err)
 		http.Error(w, "Invalid JSON structure", http.StatusBadRequest)
 		return
 	}
+
+	// Convert json.Number values to native Go types for the Avro encoder.
+	// hamba/avro expects int64 for "long" and float64 for "double", not json.Number.
+	convertJSONNumbers(event)
 
 	// Attempt to resolve the targeted Avro schema dynamically from memory cache or Confluent DB
 	cachedSchema, err := fetchAndCacheSchema(ctx, topicName)
@@ -224,21 +321,15 @@ func externalHandler(w http.ResponseWriter, r *http.Request) {
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	// Note: We skip complex standard claims validation here and just verify signature integrity for speed, but full validation can be expanded.
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return jwtSecret, nil
-	})
+	token, err := jwt.Parse(tokenString, jwtKeyFunc)
 
-	// If no secret is configured, we can block or bypass. Assuming enforcing security.
-	if len(jwtSecret) > 0 {
+	if len(jwtSecret) > 0 || ecdsaPublicKey != nil {
 		if err != nil || !token.Valid {
 			http.Error(w, "Unauthorized (Invalid JWT Signature)", http.StatusUnauthorized)
 			return
 		}
 	} else {
-		log.Println("WARNING: JWT_SECRET not configured in gateway environment. Bypassing token signature validation.")
+		log.Println("WARNING: No JWT verification key configured. Bypassing token signature validation.")
 	}
 
 	// 2. Map route mapping from URL (e.g. /api/v1/events/click)
@@ -297,6 +388,18 @@ func main() {
 		jwtSecret = []byte(jwtSecretEnv)
 	}
 
+	// Fetch ECDSA public key from Supabase JWKS endpoint for ES256 JWT validation
+	jwksURL := os.Getenv("SUPABASE_JWKS_URL")
+	if jwksURL != "" {
+		pubKey, err := fetchJWKS(jwksURL)
+		if err != nil {
+			log.Printf("WARNING: Failed to fetch JWKS from %s: %v", jwksURL, err)
+		} else {
+			ecdsaPublicKey = pubKey
+			log.Printf("ECDSA (ES256) JWT verification enabled via JWKS from %s", jwksURL)
+		}
+	}
+
 	webhookSecret = os.Getenv("WEBHOOK_SECRET")
 	if webhookSecret == "" {
 		log.Println("WARNING: WEBHOOK_SECRET is not set. Internal webhooks are missing token validation defense.")
@@ -345,8 +448,16 @@ func main() {
 
 	// 3. HTTP Server configuration - Splitting branches cleanly for strict access matrices
 	mux := http.NewServeMux()
+	mux.HandleFunc("/webhooks/media-upload", mediaWebhookHandler)
 	mux.HandleFunc("/webhooks/", webhookHandler)
 	mux.HandleFunc("/api/v1/events/", externalHandler)
+
+	// Wire upload handler with real Postgres + MinIO dependencies
+	if uploadHandler := initUploadHandler(); uploadHandler != nil {
+		mux.Handle("/api/v1/media/upload-url", uploadHandler)
+	} else {
+		log.Println("WARNING: Upload handler not initialized — /api/v1/media/upload-url will be unavailable")
+	}
 
 	server := &http.Server{Addr: ":8080", Handler: corsMiddleware(mux)}
 
