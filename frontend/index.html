@@ -55,6 +55,34 @@
         </form>
       </div>
 
+      <!-- Media Upload Section -->
+      <div id="media-section" class="media-section">
+        <div class="media-header">
+          <h3 class="media-title">📁 Media Upload</h3>
+          <span id="credit-badge" class="credit-badge" title="Upload credits remaining">⚡ <span id="credit-count">—</span> credits</span>
+        </div>
+
+        <form id="upload-form" class="upload-form">
+          <label for="file-input" class="upload-dropzone" id="upload-dropzone">
+            <span class="upload-icon">☁️</span>
+            <span class="upload-label" id="upload-label">Choose a file or drag it here</span>
+            <span class="upload-hint">Images, video, or audio · Max 9 types supported</span>
+            <input type="file" id="file-input" class="file-input"
+              accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/wav,audio/ogg">
+          </label>
+          <button type="submit" class="btn btn-primary" id="upload-btn" disabled>Upload</button>
+          <div id="upload-status" class="upload-status"></div>
+        </form>
+      </div>
+
+      <!-- Media Browser -->
+      <div id="media-browser" class="media-browser">
+        <h3 class="media-browser-title">🗂️ My Files</h3>
+        <div id="media-list" class="media-list">
+          <p id="media-empty" class="media-empty">No files uploaded yet.</p>
+        </div>
+      </div>
+
       <div class="notifications-pane">
         <h3 class="notifications-title">Live Events</h3>
         <ul id="notifications-list" class="notifications-list">

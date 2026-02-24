@@ -1,12 +1,13 @@
 import './style.css'
 import { createClient } from '@supabase/supabase-js'
+import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError } from './media.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 const apiGatewayUrl = import.meta.env.VITE_API_GATEWAY_URL || 'http://localhost:8080'
 
 if (!supabaseAnonKey) {
-    console.error("VITE_SUPABASE_ANON_KEY is missing. Please create a .env file locally with the key.");
+    console.error("VITE_SUPABASE_ANON_KEY is missing. Please create a .env file locally with the key.")
 }
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
@@ -29,7 +30,20 @@ const messageForm = document.getElementById('message-form')
 const messageInput = document.getElementById('message-input')
 const sendBtn = document.getElementById('send-message-btn')
 
+// Media DOM Elements
+const mediaSection = document.getElementById('media-section')
+const creditCount = document.getElementById('credit-count')
+const creditBadge = document.getElementById('credit-badge')
+const uploadForm = document.getElementById('upload-form')
+const fileInput = document.getElementById('file-input')
+const uploadBtn = document.getElementById('upload-btn')
+const uploadLabel = document.getElementById('upload-label')
+const uploadDropzone = document.getElementById('upload-dropzone')
+const uploadStatus = document.getElementById('upload-status')
+const mediaList = document.getElementById('media-list')
+
 let isSignupMode = false
+let selectedFile = null
 
 // Toggle between Login and Signup modes
 toggleModeBtn.addEventListener('click', () => {
@@ -146,6 +160,164 @@ if (messageForm) {
     })
 }
 
+// ─── Media Upload ───
+
+// Fetch and display credit balance
+async function refreshCredits() {
+    try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) return 0
+
+        const { data, error } = await supabase
+            .from('user_credit_balances')
+            .select('balance')
+            .eq('user_id', session.user.id)
+            .maybeSingle()
+
+        const balance = data?.balance ?? 0
+        creditCount.textContent = balance
+        creditBadge.classList.toggle('empty', balance <= 0)
+
+        // Disable upload if no credits
+        if (balance <= 0) {
+            uploadBtn.disabled = true
+            uploadStatus.textContent = 'No credits remaining — earn more to upload.'
+            uploadStatus.className = 'upload-status error'
+        } else {
+            uploadStatus.textContent = ''
+            uploadStatus.className = 'upload-status'
+        }
+
+        return balance
+    } catch (err) {
+        console.error('Failed to fetch credits:', err)
+        creditCount.textContent = '?'
+        return 0
+    }
+}
+
+// File input change
+fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0]
+    if (!file) {
+        selectedFile = null
+        uploadLabel.textContent = 'Choose a file or drag it here'
+        uploadDropzone.classList.remove('has-file')
+        uploadBtn.disabled = true
+        return
+    }
+    if (!isAllowedMediaType(file.type)) {
+        selectedFile = null
+        uploadStatus.textContent = `Unsupported file type: ${file.type}`
+        uploadStatus.className = 'upload-status error'
+        fileInput.value = ''
+        uploadBtn.disabled = true
+        return
+    }
+    selectedFile = file
+    uploadLabel.textContent = `${file.name} (${formatFileSize(file.size)})`
+    uploadDropzone.classList.add('has-file')
+    uploadBtn.disabled = false
+    uploadStatus.textContent = ''
+    uploadStatus.className = 'upload-status'
+})
+
+// Drag-and-drop
+uploadDropzone.addEventListener('dragover', (e) => { e.preventDefault(); uploadDropzone.classList.add('dragover') })
+uploadDropzone.addEventListener('dragleave', () => uploadDropzone.classList.remove('dragover'))
+uploadDropzone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    uploadDropzone.classList.remove('dragover')
+    if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files
+        fileInput.dispatchEvent(new Event('change'))
+    }
+})
+
+// Upload form submit
+uploadForm.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    if (!selectedFile) return
+
+    uploadBtn.disabled = true
+    uploadBtn.textContent = 'Uploading…'
+    uploadStatus.textContent = 'Requesting upload URL…'
+    uploadStatus.className = 'upload-status'
+
+    try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) throw new Error('Not authenticated')
+
+        const metadata = {
+            file_name: selectedFile.name,
+            media_type: selectedFile.type,
+            file_size: selectedFile.size
+        }
+
+        const { upload_url } = await requestUploadUrl(apiGatewayUrl, session.access_token, metadata)
+
+        uploadStatus.textContent = 'Uploading file…'
+        await uploadFileToStorage(upload_url, selectedFile)
+
+        uploadStatus.textContent = '✓ Upload complete'
+        uploadStatus.className = 'upload-status success'
+
+        // Reset form
+        selectedFile = null
+        fileInput.value = ''
+        uploadLabel.textContent = 'Choose a file or drag it here'
+        uploadDropzone.classList.remove('has-file')
+
+        // Refresh credits and file list
+        await Promise.all([refreshCredits(), refreshMediaBrowser()])
+
+    } catch (err) {
+        if (err instanceof InsufficientCreditsError) {
+            uploadStatus.textContent = 'Insufficient credits to upload.'
+        } else {
+            uploadStatus.textContent = `Upload failed: ${err.message}`
+        }
+        uploadStatus.className = 'upload-status error'
+        console.error('Media upload failed:', err)
+    } finally {
+        uploadBtn.disabled = false
+        uploadBtn.textContent = 'Upload'
+    }
+})
+
+// ─── Media Browser ───
+
+const CATEGORY_ICONS = { image: '🖼️', video: '🎬', audio: '🎵', unknown: '📄' }
+
+async function refreshMediaBrowser() {
+    try {
+        const files = await fetchUserFiles(supabase)
+        mediaList.innerHTML = ''
+
+        if (!files.length) {
+            mediaList.innerHTML = '<p class="media-empty">No files uploaded yet.</p>'
+            return
+        }
+
+        files.forEach(f => {
+            const cat = getMediaCategory(f.media_type)
+            const card = document.createElement('div')
+            card.className = 'media-file-card'
+            card.innerHTML = `
+                <span class="file-icon">${CATEGORY_ICONS[cat] || CATEGORY_ICONS.unknown}</span>
+                <div class="file-info">
+                    <div class="file-name" title="${f.file_name}">${f.file_name}</div>
+                    <div class="file-meta">${formatFileSize(f.file_size)} · ${cat} · ${new Date(f.upload_time).toLocaleString()}</div>
+                </div>
+            `
+            mediaList.appendChild(card)
+        })
+    } catch (err) {
+        console.error('Failed to load media files:', err)
+        mediaList.innerHTML = '<p class="media-empty">Failed to load files.</p>'
+    }
+}
+
 // Pre-fetch Recent Events history from unified notifications table
 async function fetchHistory(userId) {
     const list = document.getElementById('notifications-list');
@@ -176,11 +348,11 @@ let realtimeChannel = null;
 function formatNotification(evt) {
     const data = JSON.parse(evt.payload || '{}')
     switch (evt.event_type) {
-        case 'identity.login':   return `🚀 Flink mapped Login: ${evt.event_time}`
-        case 'identity.signup':  return `🎉 Flink mapped Signup: ${evt.event_time}`
+        case 'identity.login': return `🚀 Flink mapped Login: ${evt.event_time}`
+        case 'identity.signup': return `🎉 Flink mapped Signup: ${evt.event_time}`
         case 'identity.signout': return `👋 Flink mapped Signout: ${evt.event_time}`
-        case 'user.message':     return `💬 ${(data.email || '').split('@')[0]}: ${data.message || ''}`
-        default:                 return `📌 ${evt.event_type}: ${evt.event_time}`
+        case 'user.message': return `💬 ${(data.email || '').split('@')[0]}: ${data.message || ''}`
+        default: return `📌 ${evt.event_type}: ${evt.event_time}`
     }
 }
 
@@ -235,6 +407,10 @@ async function checkSession() {
 
         // Subscribe to NEW Flink DB events exclusively for this user
         subscribeToEvents()
+
+        // Load media data
+        refreshCredits()
+        refreshMediaBrowser()
     } else {
         // User is not logged in
         homeView.classList.remove('active-view')
