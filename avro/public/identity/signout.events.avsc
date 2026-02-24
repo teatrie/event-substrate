@@ -10,7 +10,8 @@
     },
     {
       "name": "email",
-      "type": "string",
+      "type": ["null", "string"],
+      "default": null,
       "doc": "The email address of the user."
     },
     {
