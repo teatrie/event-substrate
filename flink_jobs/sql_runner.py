@@ -87,6 +87,11 @@ def register_kafka_sources(t_env):
             'group_id': 'flink-signout-consumer',
             'fields': '`user_id` STRING, `email` STRING, `signout_time` STRING, `device_id` STRING, `user_agent` STRING, `ip_address` STRING',
         },
+        'media_upload_events': {
+            'topic': 'public.media.upload.events',
+            'group_id': 'flink-media-consumer',
+            'fields': '`user_id` STRING, `email` STRING, `file_path` STRING, `file_name` STRING, `file_size` BIGINT, `media_type` STRING, `upload_time` STRING',
+        },
     }
 
     # Register unified events Kafka sink (avoids JAAS semicolon issue with SQL file splitting)
