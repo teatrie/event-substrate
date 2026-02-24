@@ -56,6 +56,14 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** Because our local Docker volumes (ClickHouse MVs, Kafka Engine tables) are occasionally pruned or subject to ephemeral desyncs during development.
 **Decision:** Initialization actions (like `clickhouse-client -n < clickhouse/init.sql`) must be baked into the everyday `./start.sh` boot script, rather than isolating them to a one-time `./init.sh` setup script. This guarantees the entire environment Recovers and re-asserts its state completely if containers are recreated.
 
+### 2. Task `sources:` Is for Build Artifacts, Not Infrastructure State
+**Observation:** Task's `sources:` change-detection is designed for build artifacts ("recompile if source changed"). Using it on infrastructure state tasks (schema registration, topic creation) causes silent skips when containers are rebuilt but config files haven't changed — the Schema Registry is empty but Task reports "up to date."
+**Decision:** Removed `sources:` from `schemas:register` and `topics:create`. These are idempotent reconciliation tasks (~2s each) that must always run to assert external state. Build tasks (`build:gateway`, `build:consumer`) still use `sources:` because they track local artifacts, not external system state. The `start` task now includes both schema and topic reconciliation.
+
+### 3. Dockerfile Build Context Must Track All Source Files
+**Observation:** Hardcoding individual filenames in Dockerfiles (e.g., `COPY main.go ./`) causes build failures when new source files are added. The error only surfaces at Docker build time — local builds succeed because the compiler sees all files in the directory.
+**Decision:** Use glob patterns (`COPY *.go ./`, `COPY src/ ./src/`) in Dockerfiles. When adding any new source file to a service, verify its Dockerfile copies it into the build context.
+
 ---
 
 ## 🔐 Kafka Authentication (SASL/SCRAM)
@@ -91,6 +99,58 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ### 8. RLS Must Scope Message Visibility — Not Just Event Type
 **Observation:** The original RLS policy `USING (auth.uid()::text = user_id OR event_type = 'user.message')` made ALL messages visible to ALL authenticated users. This caused E2E test messages (e.g., `e2e-test-*` from `test-*@e2e-test.local` users) to leak into real users' Live Events feeds.
 **Decision:** Added `visibility` (`broadcast` | `direct`) and `recipient_id` columns to `user_notifications`. The RLS policy now has three clauses: own events, broadcast messages, or direct messages where `recipient_id = auth.uid()`. E2E tests send with `visibility: 'direct'` targeting the test user, so they never pollute the broadcast feed. The Avro schema uses a default of `"broadcast"` for backward compatibility.
+
+---
+
+## 📁 Media Upload & Credit Economy
+
+### 1. MinIO Webhook Event Format Requires Transformation
+**Observation:** MinIO S3 event notifications use a nested JSON structure (`Records[].s3.bucket.name`, `Records[].s3.object.key`, etc.) that doesn't directly map to our Avro `NewFileUploaded` schema. The event also includes URL-encoded keys and metadata in custom headers (`x-amz-meta-*`).
+**Decision:** Built a dedicated `media_webhook_handler.go` that extracts and transforms the MinIO event format into our flat Avro-compatible structure before producing to Kafka. This keeps the Flink SQL processor simple — it reads clean, pre-normalized events.
+
+### 2. Append-Only Credit Ledger Over Mutable Balance Column
+**Observation:** A mutable `balance` column on a `user_credits` table would require UPDATE operations, which conflict with Flink JDBC sinks (append-only, no PRIMARY KEY for pure INSERT). It also loses the audit trail of individual credit transactions.
+**Decision:** Used an append-only `credit_ledger` table where each row is a signed delta (`+2` for signup, `-1` for upload). A `user_credit_balances` view aggregates `SUM(amount)` grouped by `user_id`. This fits Flink's INSERT-only model, provides a full audit trail, and enables future credit analytics.
+
+### 3. Credit Deduction on Upload Completion, Not URL Request
+**Observation:** Deducting credits when the presigned URL is generated (at request time) would charge users for uploads that fail, get abandoned, or timeout. Refund logic would add significant complexity.
+**Decision:** Credits are checked (but not deducted) at presigned URL request time — the balance check prevents unauthorized uploads. Actual deduction happens asynchronously when MinIO fires the upload completion webhook. The tradeoff is a brief race window where a user could request multiple URLs with only 1 credit remaining, but this is acceptable given the low-stakes credit economy.
+
+### 4. CORS Required for Browser-Direct Presigned URL Uploads
+**Observation:** When the browser uploads directly to MinIO/GCS via a presigned PUT URL, the request is cross-origin (different port/domain than the frontend). Without CORS headers on the storage bucket, the browser blocks the upload with an opaque network error.
+**Decision:** Configured CORS on the MinIO `media-uploads` bucket via `scripts/minio-init.sh` (`mc anonymous set-json`). In production, the GCS bucket CORS config must restrict `AllowedOrigins` to the production frontend domain(s) rather than `*`.
+
+### 5. Presigned URLs Decouple Upload Size from API Gateway Memory
+**Observation:** Proxying file uploads through the API Gateway would require buffering the entire file in memory (or streaming with backpressure), increasing memory footprint and latency linearly with file size.
+**Decision:** The Claim Check pattern sends only metadata through the event pipeline. The browser uploads directly to object storage via presigned PUT URLs. The API Gateway never sees the file bytes — it only validates auth, checks credits, and signs the URL. This keeps the Gateway stateless and lightweight regardless of upload size.
+
+### 6. S3v4 Presigned URLs Cannot Have Their Host Rewritten
+**Observation:** S3v4 presigned URLs include the `Host` header in the canonical request that's hashed into the signature. If you rewrite `host.docker.internal:9000` → `localhost:9000` in the URL, the browser sends `Host: localhost:9000`, which doesn't match the signed host, and MinIO returns `SignatureDoesNotMatch` (403).
+**Decision:** Never rewrite the host portion of a presigned URL. Instead, ensure the client can resolve the original hostname. In E2E tests, use Node's `http.request` API (not `fetch`) to connect to `127.0.0.1` while explicitly sending the original `Host: host.docker.internal:9000` header. Node's `fetch` (undici) silently strips custom `Host` headers for security — only `http.request` preserves them.
+
+### 7. MinIO Sends URL-Encoded Object Keys in Webhook Events
+**Observation:** MinIO S3 event notifications URL-encode the object key — forward slashes become `%2F` (e.g., `uploads%2F{user_id}%2F{uuid}%2Fimage.png`). Splitting on `/` without decoding first yields a single segment, causing path parsing to skip the record as non-matching.
+**Decision:** Always `url.QueryUnescape` the `Records[].s3.object.key` field before parsing the path structure. This is not documented in MinIO's webhook documentation and only surfaces when keys contain path separators.
+
+### 8. JSON Number Type Coercion Breaks Avro `long` Fields — Full Fix Chain
+**Observation:** Go's `encoding/json` package has three levels of numeric handling, each insufficient on its own for Avro:
+1. `json.Unmarshal` into `map[string]any` → all numbers become `float64` → Avro rejects with "float64 is unsupported for Avro long"
+2. `json.NewDecoder().UseNumber()` into `map[string]any` → numbers become `json.Number` (string type) → Avro rejects with "json.Number is unsupported for Avro long"
+3. Both are needed: `UseNumber()` preserves the exact representation, then a custom `convertJSONNumbers()` walker converts `json.Number` → `int64` (via `.Int64()`) or `float64` (via `.Float64()`) for native Go types that hamba/avro accepts.
+
+**Decision:** In `processAndProduceEvent` (the shared entry point for ALL event production), use `json.NewDecoder().UseNumber()` for deserialization, then call `convertJSONNumbers(event)` to recursively convert `json.Number` values to native `int64`/`float64` before Avro encoding. This fix benefits all topics with numeric Avro fields, not just media uploads. The `json.Number` usage in `mediaWebhookHandler` is still correct — it preserves integers through the JSON marshal step — but wouldn't be sufficient alone without the decoder-side fix.
+
+### 9. MinIO Webhook Auth Requires Version-Specific Configuration
+**Observation:** MinIO's `mc admin config set notify_webhook:gateway auth_token=...` parameter exists in documentation but is not supported in all MinIO versions. The config silently ignores the `auth_token` field, causing webhooks to arrive without any authentication header, resulting in 401 errors from the gateway.
+**Decision:** Do not rely on `auth_token` for MinIO webhook authentication in local dev. Instead, authenticate MinIO's webhook endpoint by network isolation (the endpoint is only reachable from within the Docker/K8s network). Add a `TODO(prod)` for IP allowlisting or mutual TLS in production. Always check `mc admin config get` output to verify which fields are actually persisted.
+
+### 10. MinIO Webhook Setup Is Infrastructure State, Not Build State
+**Observation:** MinIO's webhook notification configuration (target endpoint, event subscriptions) is stored in MinIO's internal state, not in config files. Restarting the MinIO container preserves the config, but re-creating the container (via `docker compose down`/`up` or volume pruning) loses it. Unlike Redpanda topics/schemas, there's no `sources:` fingerprinting — the webhook must be re-applied.
+**Decision:** The `scripts/setup-minio-webhook.sh` script must be included in the `task start` startup sequence, similar to `schemas:register` and `topics:create`. It is idempotent (re-applies are safe) and should always run to reconcile state. The `AGENT.md` deployment checklist calls this out explicitly.
+
+### 11. MinIO Event Queue Persists Failed Deliveries Across Restarts
+**Observation:** When a MinIO webhook returns a non-2xx status, MinIO enqueues the event for retry (every ~3 seconds). This queue persists across container restarts and even survives deletion of the original object. A single failed webhook can generate thousands of retry attempts, dominating gateway logs and potentially blocking new event deliveries via queue saturation.
+**Decision:** When debugging MinIO webhook issues: (1) always check gateway logs for the actual user ID — if you see the SAME user retrying, it's a stale event, not a new upload; (2) restart MinIO AND re-run `setup-minio-webhook.sh` to clear the retry queue; (3) clear stale objects with `mc rm --recursive --force` before re-testing. The `httptest.ResponseRecorder` pattern in `mediaWebhookHandler` now returns proper HTTP status codes to MinIO, so successful events get acknowledged immediately (200) while failures get retried (400+).
 
 ---
 

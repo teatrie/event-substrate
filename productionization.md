@@ -15,7 +15,7 @@ All Docker Compose services must be replaced with cloud-managed equivalents. Sel
 |---|---|---|---|
 | **Redpanda** (Kafka-compatible broker) | Confluent Cloud or Redpanda Serverless | Amazon MSK Serverless or Confluent Cloud | Must support Kafka protocol, Avro, and consumer groups |
 | **Schema Registry** (Confluent) | Confluent Cloud Schema Registry | Confluent Cloud Schema Registry or AWS Glue Schema Registry | Glue Schema Registry supports Avro but has different API semantics |
-| **MinIO** (S3 object storage) | Google Cloud Storage (GCS) | Amazon S3 | Used for Iceberg data lake storage |
+| **MinIO** (S3 object storage) | Google Cloud Storage (GCS) | Amazon S3 | Used for Iceberg data lake storage AND media file uploads (`media-uploads` bucket) |
 | **Project Nessie** (Iceberg catalog) | Self-hosted on GKE, or BigLake Metastore | AWS Glue Data Catalog, or self-hosted on EKS | Nessie currently runs `IN_MEMORY` — needs persistent backend |
 | **ClickHouse** (OLAP warehouse) | ClickHouse Cloud | ClickHouse Cloud | Cloud-agnostic SaaS; connect via native protocol over TLS |
 | **Prometheus + Loki + Jaeger + Grafana** | Google Cloud Operations Suite, or Grafana Cloud | Amazon CloudWatch + X-Ray, or Grafana Cloud | See Section 8 for migration path |
@@ -58,6 +58,9 @@ Every credential below is currently stored in plaintext and checked into version
 | SASL flink-processor password | `flink-processor-local-pw` | `kubernetes/flink-deployment.yaml`, `kubernetes/pyflink-deployment.yaml` | — |
 | SASL schema-admin password | `schema-admin-local-pw` | `docker-compose.yml` (Schema Registry JAAS) | — |
 | SASL clickhouse-consumer password | `clickhouse-local-pw` | `clickhouse/kafka-sasl.xml` | — |
+| MinIO access key (upload handler) | `admin` | `go-services/api-gateway` env vars | — |
+| MinIO secret key (upload handler) | `password` | `go-services/api-gateway` env vars | — |
+| MinIO webhook auth token | (if configured) | `scripts/setup-minio-webhook.sh` | — |
 
 ### Migration Path
 
@@ -140,6 +143,9 @@ Every `host.docker.internal` and `localhost` reference must become an environmen
 
 ### CORS Lockdown
 `go-services/api-gateway/main.go:267` currently sets `Access-Control-Allow-Origin: *`. This must be restricted to the production frontend domain(s).
+
+### MinIO/GCS CORS for Browser-Direct Uploads
+The `media-uploads` MinIO bucket has permissive CORS (`*`) configured by `scripts/minio-init.sh`. In production, the GCS bucket CORS policy must restrict `AllowedOrigins` to the production frontend domain(s) and limit `AllowedMethods` to `PUT` only.
 
 ---
 
@@ -270,6 +276,7 @@ The `message-consumer` opens a raw `sql.Open()` connection with no pool configur
 | **Unstructured logging** | Uses `log.Printf` — no JSON, no levels, no correlation IDs | MEDIUM |
 | **5s shutdown timeout** | Line 346: may be too short for in-flight Kafka produce callbacks | MEDIUM |
 | **Hardcoded 1MB body limit** | Line 129: should be configurable | LOW |
+| **Presigned URL expiry** | Upload presigned URLs have a fixed expiry — should be configurable via env var | LOW |
 
 ### Message Consumer (`go-services/message-consumer/main.go`)
 
@@ -419,7 +426,40 @@ Supabase Cloud runs on AWS. Deploying EKS in the **same AWS region** as your Sup
 
 ---
 
-## 11. Production Readiness Checklist
+## 11. Media Upload: MinIO → Cloud Storage Migration
+
+### Presigned URL Migration (MinIO → GCS/S3)
+The `upload_handler.go` uses `CreditChecker` and `URLSigner` interfaces. In production:
+- **GCP:** Replace MinIO presigned URLs with [GCS V4 Signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls). Use Workload Identity — no JSON key files. The `URLSigner` interface abstracts this swap.
+- **AWS:** Replace with [S3 Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html). Use IRSA for credentials.
+
+### Storage Event Bridge (MinIO Webhook → Cloud Pub/Sub)
+MinIO fires S3 event notifications via webhook to `POST /webhooks/media-upload`. In production:
+- **GCP:** Replace with [GCS Pub/Sub notifications](https://cloud.google.com/storage/docs/pubsub-notifications). A Cloud Function or small adapter service subscribes to the Pub/Sub topic and produces to Kafka (or the `media_webhook_handler.go` listens on a Pub/Sub subscription instead of an HTTP webhook).
+- **AWS:** Replace with [S3 Event Notifications → SNS/SQS](https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html). Route to a Lambda or the webhook handler via SQS.
+
+### New Environment Variables
+
+| Env Var | Service | Purpose |
+|---|---|---|
+| `MINIO_ENDPOINT` | api-gateway | MinIO/S3/GCS endpoint for presigned URL generation |
+| `MINIO_ACCESS_KEY` | api-gateway | Storage access key (use Workload Identity/IRSA in prod) |
+| `MINIO_SECRET_KEY` | api-gateway | Storage secret key (use Workload Identity/IRSA in prod) |
+| `MINIO_BUCKET` | api-gateway | Bucket name for media uploads (`media-uploads`) |
+| `SUPABASE_DB_URL` | api-gateway | Postgres connection string for credit balance queries |
+| `SUPABASE_JWT_SECRET` | api-gateway | Symmetric HS256 JWT signing secret (Supabase project JWT secret) |
+| `SUPABASE_JWKS_URL` | api-gateway | JWKS endpoint for ES256 public key fetch (e.g., `https://<project>.supabase.co/auth/v1/.well-known/jwks.json`) |
+
+### Media Upload CORS Bucket Policy
+The MinIO `media-uploads` bucket uses permissive CORS for local dev. In production, lock down:
+- `AllowedOrigins`: production frontend domain only
+- `AllowedMethods`: `PUT` only
+- `AllowedHeaders`: `Content-Type`, `Content-Length`
+- `MaxAgeSeconds`: 3600
+
+---
+
+## 12. Production Readiness Checklist
 
 ### Pre-Launch (Blocking)
 
@@ -435,6 +475,10 @@ Supabase Cloud runs on AWS. Deploying EKS in the **same AWS region** as your Sup
 - [ ] Rate limiting enabled on API Gateway (Section 7)
 - [ ] CI/CD pipeline deploying SHA-tagged images (Section 9)
 - [ ] Database migrations run in CI (Section 9)
+- [ ] MinIO presigned URLs replaced with GCS/S3 signed URLs (Section 11)
+- [ ] MinIO webhook replaced with GCS Pub/Sub or S3 Event Notifications (Section 11)
+- [ ] Media upload bucket CORS restricted to production domain (Section 11)
+- [ ] Storage credentials use Workload Identity / IRSA, not static keys (Section 11)
 
 ### Pre-Launch (Recommended)
 

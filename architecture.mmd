@@ -17,12 +17,16 @@ graph TD
     subgraph "Auth & Core Operations"
         Supabase[("Supabase\nPostgreSQL & Auth")]:::db
         UserNotifs[("user_notifications\n(Unified Egress)")]:::db
+        CreditLedger[("credit_ledger\n(Append-Only)")]:::db
+        CreditView["user_credit_balances\n(SUM View)"]:::db
+        MediaFiles[("media_files\n(File Metadata)")]:::db
     end
 
     WebUI -.->|"1. Authentication"| Supabase
     Supabase -->|"2. pg_net webhooks\nPOST /webhooks/{topic}\n(X-Webhook-Secret)"| API
-    WebUI -->|"3. Direct Client Ingress\nPOST /api/v1/events/{topic}\n(JWT Bearer)"| API
+    WebUI -->|"3. Direct Client Ingress\nPOST /api/v1/events/{topic}\n(JWT: HS256 + ES256)"| API
     UserNotifs -.->|"Supabase Realtime\n(Single Subscription)"| WebUI
+    API -.->|"Fetch JWKS\n(ES256 Public Key)"| Supabase
 
     subgraph "Kubernetes: go-microservices Namespace"
         API["Go API Gateway\n(api-gateway)"]:::gateway
@@ -35,9 +39,10 @@ graph TD
     KEDA -.->|"Watch Kafka Lag\n(Threshold: 5)"| TopicMessage
     KEDA -->|"Auto-Scale Pods"| GoMessageConsumer
 
-    subgraph "Data Lake (Iceberg)"
+    subgraph "Data Lake & Object Storage"
         Nessie["Project Nessie\n(REST Catalog)"]:::registry
         MinIO[("MinIO\n(S3 Object Storage)")]:::db
+        MediaBucket[("MinIO: media-uploads\n(Claim Check Store)")]:::db
     end
 
     subgraph "Message Broker (Redpanda · SASL/SCRAM-SHA-256)"
@@ -49,6 +54,7 @@ graph TD
             TopicSignup("public.identity.signup.events"):::broker
             TopicSignout("public.identity.signout.events"):::broker
             TopicMessage("public.user.message.events"):::broker
+            TopicMediaUpload("public.media.upload.events"):::broker
         end
         subgraph "Internal Topics (internal.*)"
             TopicUnified("internal.platform.unified.events"):::broker
@@ -71,6 +77,7 @@ graph TD
             FlinkSignup["Flink SQL:\nsignup_events_processor"]:::stream
             FlinkSignout["Flink SQL:\nsignout_events_processor"]:::stream
             FlinkUnion["Flink SQL:\nunified_events_processor"]:::stream
+            FlinkCredits["Flink SQL:\ncredit_balance_processor"]:::stream
             PyFlinkEcho["PyFlink:\necho_processor"]:::stream
         end
     end
@@ -99,6 +106,7 @@ graph TD
     TopicUnified -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicPy -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicMessage -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicMediaUpload -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     Nessie -->|"Manage Metadata & Data"| MinIO
 
     %% Processors write to unified notifications only
@@ -106,6 +114,22 @@ graph TD
     FlinkSignup -->|"INSERT JDBC\n(identity.signup)"| UserNotifs
     FlinkSignout -->|"INSERT JDBC\n(identity.signout)"| UserNotifs
     GoMessageConsumer -->|"lib/pq INSERT\n(user.message)"| UserNotifs
+
+    %% Credit balance processor (consumes signup + media upload events)
+    TopicSignup -->|"Consume Avro"| FlinkCredits
+    TopicMediaUpload -->|"Consume Avro"| FlinkCredits
+    FlinkCredits -->|"INSERT JDBC\n(+2 signup / -1 upload)"| CreditLedger
+    FlinkCredits -->|"INSERT JDBC\n(file metadata)"| MediaFiles
+    FlinkCredits -->|"INSERT JDBC\n(credit.balance_changed)"| UserNotifs
+    CreditLedger -.->|"SUM(amount)"| CreditView
+
+    %% Media upload flow (Claim Check Pattern)
+    WebUI -->|"4. POST /api/v1/media/upload-url\n(JWT + credit check)"| API
+    API -->|"Query balance"| CreditView
+    API -->|"Return presigned PUT URL"| WebUI
+    WebUI -->|"5. PUT file (browser-direct)\n(presigned URL + CORS)"| MediaBucket
+    MediaBucket -->|"6. Webhook notification\nPOST /webhooks/media-upload"| API
+    API -->|"🔑 api-gateway\nProduce Avro\n(S3→Avro transform)"| TopicMediaUpload
 
     subgraph "Real-Time OLAP (🔑 clickhouse-consumer)"
         CHKafka["Kafka Table Engine"]:::olap

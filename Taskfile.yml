@@ -103,8 +103,6 @@ tasks:
   # ---------------------------------------------------------------------------
   schemas:register:
     desc: Auto-discover and register all Avro schemas from avro/ directory
-    sources:
-      - avro/**/*.avsc
     cmds:
       - |
         find avro -name "*.avsc" -type f | while read -r schema_file; do
@@ -128,8 +126,6 @@ tasks:
 
   topics:create:
     desc: Create Kafka topics and enable Iceberg (auto-discovered from avro/)
-    sources:
-      - avro/**/*.avsc
     cmds:
       - |
         SU="--user superuser --password superuser-local-pw --sasl-mechanism SCRAM-SHA-256"
@@ -179,6 +175,7 @@ tasks:
         --from-file=signup_events_processor.sql=flink_jobs/signup_events_processor.sql
         --from-file=signout_events_processor.sql=flink_jobs/signout_events_processor.sql
         --from-file=unified_events_processor.sql=flink_jobs/unified_events_processor.sql
+        --from-file=credit_balance_processor.sql=flink_jobs/credit_balance_processor.sql
         --from-file=sql_runner.py=flink_jobs/sql_runner.py
         --dry-run=client -o yaml | kubectl apply -f -
       - >-
@@ -235,6 +232,8 @@ tasks:
       - task: infra:docker
       - task: auth:setup
       - task: wait:schema-registry
+      - task: schemas:register
+      - task: topics:create
       - task: k8s:configmaps
       - task: k8s:flink
       - task: k8s:go-services
@@ -253,6 +252,16 @@ tasks:
       - docker compose down
       - supabase stop
       - echo "✅ Shutdown complete."
+
+  purge:
+    desc: Nuclear teardown — destroy all state and rebuild from scratch
+    cmds:
+      - task: shutdown
+      - echo "🧹 Destroying all persistent state..."
+      - docker compose down -v
+      - task: clean
+      - supabase db reset
+      - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
   # ---------------------------------------------------------------------------
   # E2E Testing
@@ -306,6 +315,36 @@ tasks:
     dir: tests/e2e
     cmds:
       - node test_rls_isolation.mjs
+
+  test:e2e:credits:
+    desc: Test signup → credit_ledger (+2 credits) + credit.balance_changed notification
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_credit_economy.mjs
+
+  test:e2e:upload:
+    desc: Test full media upload flow (presigned URL → MinIO → webhook → Flink → credit deduction)
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_media_upload.mjs
+
+  test:browser:install:
+    desc: Install Playwright browser test dependencies
+    dir: tests/browser
+    sources:
+      - package.json
+    cmds:
+      - npm install
+      - npx playwright install chromium
+
+  test:browser:
+    desc: Run Playwright browser UI tests (requires `task frontend` running)
+    deps: [test:browser:install]
+    dir: tests/browser
+    cmds:
+      - npx playwright test
 
   # ---------------------------------------------------------------------------
   # Utility

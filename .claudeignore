@@ -1,0 +1,59 @@
+# ========================================
+# Claude Token-Saver Ignore File
+# ========================================
+# This prevents the AI from reading heavy binaries, 
+# local database states, and massive event logs.
+
+# 1. Go Build Artifacts & Cache
+bin/
+obj/
+*.test
+*.out
+vendor/
+
+# 2. Python & Flink State
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+# Block local Flink checkpoints and savepoints
+/flink-checkpoints/
+/flink-savepoints/
+
+# 3. Frontend & Node Modules
+node_modules/
+dist/
+build/
+.next/
+
+# 4. Infrastructure & Local Data Volumes
+# Block massive local Kafka event logs and Zookeeper data
+/kafka-logs/
+/zk-data/
+# Block local Supabase database volumes and temp files
+/supabase/.temp/
+/supabase/.branches/
+/supabase/db/
+*.sql.gz
+
+# Test artifacts
+tests/browser/test-results/
+
+# Go compiled binaries
+go-services/api-gateway/api-gateway
+
+# 5. Media & Test Uploads
+# Prevent Claude from trying to read raw video/audio files 
+# you use to test the GCS signed URL uploads
+*.mp4
+*.mp3
+*.wav
+*.mov
+*.jpg
+*.png
+/test-media-uploads/
+
+# 6. macOS System Files
+.DS_Store

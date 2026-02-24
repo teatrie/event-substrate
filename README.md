@@ -47,7 +47,20 @@ See [architecture.md](./architecture.md) for a detailed architecture diagram and
 5. **Egress (Realtime):** The Consumer executes a prepared Postgres INSERT into the unified `public.user_notifications` table (event type `user.message`, JSON payload containing email and message text). Each message carries a `visibility` field (`broadcast` or `direct`) and an optional `recipient_id` for targeted delivery.
 6. **Websockets:** Supabase catches the `user_notifications` insertion on its logical replication hook and fires a payload over `supabase_realtime` websockets. RLS policies scope delivery: broadcast messages reach all authenticated clients, while direct messages are only visible to the sender and the designated recipient. The frontend parses the `event_type` and `payload` fields to render the notification.
 
+### Feature Flow (Media File Upload + Credit Economy)
+1. **Action:** An authenticated user selects a file to upload on the Vite Frontend.
+2. **Credit Check:** The Frontend calls `POST /api/v1/media/upload-url` with the Supabase JWT. The Go API Gateway queries the `user_credit_balances` Postgres view — if the user has insufficient credits, it returns `402 Payment Required` (via `InsufficientCreditsError`).
+3. **Presigned URL (Claim Check Pattern):** On success, the Gateway generates a MinIO/S3 presigned PUT URL and returns it to the client. The raw file never touches the API Gateway or Kafka — only metadata flows through the event pipeline.
+4. **Browser-Direct Upload:** The Frontend uploads the file directly to MinIO/GCS using the presigned URL, bypassing the API Gateway entirely.
+5. **Storage Event Bridge:** MinIO fires an S3 event notification webhook to `POST /webhooks/media-upload` on the API Gateway. The handler (`media_webhook_handler.go`) transforms the MinIO event format into an Avro-compatible `NewFileUploaded` event and produces it to `public.media.upload.events`.
+6. **Stream Processing (Flink):** The `credit_balance_processor.sql` consumes upload events and executes 3 operations: deducts 1 credit in `credit_ledger`, persists file metadata in `media_files`, and inserts a `credit.balance_changed` notification into `user_notifications`. Signup events also flow through this processor, granting +2 initial credits.
+7. **Egress (Realtime):** The `credit.balance_changed` notification surfaces via the existing Supabase Realtime channel on `user_notifications`.
+
+> [!NOTE]
+> **Credit Deduction Timing:** Credits are deducted asynchronously on upload *completion* (when MinIO fires the webhook), not at presigned URL request time. This prevents charging users for failed or abandoned uploads. The `credit_ledger` table is append-only (no UPDATEs), providing a full audit trail and fitting the Flink JDBC append-only sink pattern.
+
 ### Additional Processing & Storage
+*   **Media File Storage (MinIO / GCS):** Uploaded media files are stored in the `media-uploads` MinIO bucket (GCS in production). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
 *   **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
 *   **PyFlink Microservice:** A Python Flink application runs natively in K8s, consuming from the `public.identity.login.events` and `public.identity.signup.events` topics and echoing streams structurally to `PyEchoEvent`.
 
@@ -71,7 +84,7 @@ When extending or maintaining this platform, **strict adherence to framework and
 - `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
 - `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
 - `tests/e2e/`: End-to-end pipeline tests validating the full data flow into `user_notifications`.
-- `frontend/`: Vanilla Vite web application providing the sleek UI for Logins and Signups.
+- `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
 - `pyflink_jobs/`: Python Flink scripts (e.g., `echo_processor.py`).
 - `go-services/`: Go microservices (`api-gateway`, `message-consumer`).
 - `kubernetes/`: Kubernetes deployment manifests for Flink, Go services, and Flink Operator.
@@ -138,6 +151,7 @@ task shutdown
 | `task test:e2e` | Run all end-to-end pipeline tests |
 | `task test:e2e:login` | Test login → user_notifications flow |
 | `task test:e2e:message` | Test message → user_notifications flow |
+| `task test:e2e:upload` | Test media upload → credit deduction → notification flow |
 | `task frontend` | Install dependencies and start Vite dev server |
 | `task status` | Show status of all services |
 | `task logs:gateway` | Tail API Gateway logs |
