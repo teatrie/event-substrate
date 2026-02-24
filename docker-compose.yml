@@ -40,7 +40,7 @@ services:
         condition: service_healthy
     volumes:
       - ./scripts/setup-redpanda-auth-internal.sh:/setup.sh:ro
-    entrypoint: ["/bin/bash", "/setup.sh"]
+    entrypoint: [ "/bin/bash", "/setup.sh" ]
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -57,8 +57,7 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
       SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM: SCRAM-SHA-256
       SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG: >-
-        org.apache.kafka.common.security.scram.ScramLoginModule required
-        username="schema-admin" password="schema-admin-local-pw";
+        org.apache.kafka.common.security.scram.ScramLoginModule required username="schema-admin" password="schema-admin-local-pw";
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -72,6 +71,11 @@ services:
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: password
+      # Allow browser-direct uploads from the Vite frontend dev server
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:5173,http://127.0.0.1:5173"
+      # Webhook notification for media upload events → API Gateway
+      MINIO_NOTIFY_WEBHOOK_ENABLE_GATEWAY: "on"
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_GATEWAY: "http://host.docker.internal:8080/webhooks/media-upload"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -80,8 +84,9 @@ services:
     container_name: minio-init
     depends_on:
       - minio
-    entrypoint: >
-      /bin/sh -c " sleep 5; mc alias set myminio http://minio:9000 admin password; mc mb myminio/redpanda || true; exit 0; "
+    volumes:
+      - ./scripts/minio-init.sh:/minio-init.sh:ro
+    entrypoint: [ "/bin/sh", "/minio-init.sh" ]
 
   nessie:
     image: ghcr.io/projectnessie/nessie:latest
