@@ -8,6 +8,7 @@ node_modules/
 
 # Go
 bin/
+go-services/api-gateway/api-gateway
 api-gateway-test
 
 # Python
@@ -17,6 +18,33 @@ __pycache__/
 
 # Environment/Secrets
 .env
+.env.*
+!.env.example
+
+# Supabase local CLI state
+supabase/.branches/
+supabase/.temp/
+
+# Build output
+frontend/dist/
+
+# Test artifacts
+tests/browser/test-results/
 
 # OS
 .DS_Store
+
+# ========================================
+# Claude Code & AI Agent Files
+# ========================================
+# Ignore personal Claude configuration overrides
+.claude/settings.local.json
+
+# Ignore Claude's local conversation history and state
+# (Prevents your team from downloading your personal chat logs)
+.claude/history/
+.claude/state/
+.claude/messages/
+
+# AI TDD lockfiles
+.tdd-active
