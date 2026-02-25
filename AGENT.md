@@ -1,6 +1,6 @@
 # Agent Guidelines
 
-Event-driven microservices platform. See [README.md](./README.md) for architecture overview, [architecture.md](./architecture.md) for data flow, and [learnings.md](./learnings.md) for gotchas.
+Event-driven microservices platform. See [README.md](./README.md) for architecture overview, [architecture.md](./architecture.md) for data flow, [learnings.md](./learnings.md) for gotchas, and [productionization.md](./productionization.md) for cloud deployment.
 
 Service-specific conventions live in each sub-folder's `AGENT.md`:
 - `go-services/AGENT.md` — Go, Docker, media endpoints, credit economy
@@ -24,10 +24,6 @@ This platform is organized around explicit domain ownership. Violating these bou
 
 **Avro schemas:** Live in `avro/` with directory paths mapping to Kafka topic names (e.g., `avro/public/identity/login.events.avsc` → topic `public.identity.login.events`). Renaming topics requires re-registering schemas under the new `<topic>-value` subject.
 
-**Unified egress:** All processors write exclusively to `user_notifications`. Exception: `credit_balance_processor` also writes to `credit_ledger` and `media_files` via JDBC sinks.
-
-**Topic routing:** Strictly allowlisted via `go-services/api-gateway/routes.yaml` (hot-reloaded by fsnotify). Media endpoints are wired directly in `main.go`, not via routes.yaml.
-
 ## Deployment Checklist
 1. **Go changes:** `task build:consumer` or `task build:gateway` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
 2. **Flink SQL changes:** `task k8s:configmaps` → delete + re-apply FlinkDeployment.
@@ -38,10 +34,7 @@ This platform is organized around explicit domain ownership. Violating these bou
 7. **Persistent failures:** `task purge && task init`
 
 ## Key Knowledge
-- Query **ChromaDB** for past learnings before major architectural changes (skip if unavailable)
-- **Redpanda Auth:** SASL/SCRAM enabled via `redpanda-bootstrap.yaml`. `redpanda-auth-init` creates users/ACLs before Schema Registry starts. ACLs enforce `public.*` vs `internal.*` topic boundaries.
 - **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Use `/feature-epic` for multi-domain features (breaks into domains, runs TDD per domain). Add `/agent-team` to either for cost-effective model selection and escalation. Skip TDD for config/YAML, migrations, docs, one-line fixes.
 - **Testing:** E2E tests in `tests/e2e/` are mandatory for every feature. Plan them explicitly in Phase 1 of `/feature-epic`. Run `task start` then `task test:e2e` after pipeline changes.
 - **Architecture Diagram:** Update `architecture.mmd` and regenerate `architecture.svg` (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes.
 - **Documentation:** After any change, update all affected docs: `README.md`, `architecture.md`, `architecture.mmd`, `AGENT.md`, `learnings.md`, `productionization.md`.
-- See [productionization.md](./productionization.md) for cloud deployment checklist.
