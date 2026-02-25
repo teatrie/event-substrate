@@ -59,6 +59,18 @@ See [architecture.md](./architecture.md) for a detailed architecture diagram and
 > [!NOTE]
 > **Credit Deduction Timing:** Credits are deducted asynchronously on upload *completion* (when MinIO fires the webhook), not at presigned URL request time. This prevents charging users for failed or abandoned uploads. The `credit_ledger` table is append-only (no UPDATEs), providing a full audit trail and fitting the Flink JDBC append-only sink pattern.
 
+### Feature Flow (Media File Download)
+1. **Action:** An authenticated user clicks the download button on a file in the Media Browser.
+2. **Presigned GET URL:** The Frontend calls `POST /api/v1/media/download-url` with the Supabase JWT and `file_path`. The Go API Gateway verifies file ownership by querying `media_files` (active files only) and generates a presigned GET URL from MinIO/S3.
+3. **Kafka Event:** The Gateway emits a `FileDownloaded` event to `public.media.download.events` for audit/analytics.
+4. **Browser Download:** The Frontend opens the presigned GET URL in a new tab, downloading the file directly from MinIO/GCS.
+
+### Feature Flow (Media File Delete)
+1. **Action:** An authenticated user clicks the delete button on a file in the Media Browser.
+2. **Soft Delete:** The Frontend calls `POST /api/v1/media/delete` with the Supabase JWT and `file_path`. The Go API Gateway verifies file ownership and sets `status = 'deleted'` in `media_files`. No credit refund.
+3. **Kafka Event:** The Gateway emits a `FileDeleted` event to `public.media.delete.events` for audit/analytics.
+4. **Immediate Effect:** RLS policies filter `status = 'active'` only, so the file vanishes from all user queries and the Media Browser immediately.
+
 ### Additional Processing & Storage
 *   **Media File Storage (MinIO / GCS):** Uploaded media files are stored in the `media-uploads` MinIO bucket (GCS in production). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
 *   **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
@@ -152,6 +164,7 @@ task shutdown
 | `task test:e2e:login` | Test login → user_notifications flow |
 | `task test:e2e:message` | Test message → user_notifications flow |
 | `task test:e2e:upload` | Test media upload → credit deduction → notification flow |
+| `task test:e2e:download-delete` | Test media download + soft-delete flow |
 | `task frontend` | Install dependencies and start Vite dev server |
 | `task status` | Show status of all services |
 | `task logs:gateway` | Tail API Gateway logs |

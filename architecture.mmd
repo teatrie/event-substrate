@@ -55,6 +55,8 @@ graph TD
             TopicSignout("public.identity.signout.events"):::broker
             TopicMessage("public.user.message.events"):::broker
             TopicMediaUpload("public.media.upload.events"):::broker
+            TopicMediaDownload("public.media.download.events"):::broker
+            TopicMediaDelete("public.media.delete.events"):::broker
         end
         subgraph "Internal Topics (internal.*)"
             TopicUnified("internal.platform.unified.events"):::broker
@@ -107,6 +109,8 @@ graph TD
     TopicPy -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicMessage -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicMediaUpload -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicMediaDownload -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+    TopicMediaDelete -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     Nessie -->|"Manage Metadata & Data"| MinIO
 
     %% Processors write to unified notifications only
@@ -130,6 +134,18 @@ graph TD
     WebUI -->|"5. PUT file (browser-direct)\n(presigned URL + CORS)"| MediaBucket
     MediaBucket -->|"6. Webhook notification\nPOST /webhooks/media-upload"| API
     API -->|"🔑 api-gateway\nProduce Avro\n(S3→Avro transform)"| TopicMediaUpload
+
+    %% Media download flow
+    WebUI -->|"POST /api/v1/media/download-url\n(JWT + ownership check)"| API
+    API -->|"Query file metadata"| MediaFiles
+    API -->|"Return presigned GET URL"| WebUI
+    API -->|"🔑 api-gateway\nProduce Avro\n(FileDownloaded)"| TopicMediaDownload
+    WebUI -.->|"GET file (browser-direct)\n(presigned URL)"| MediaBucket
+
+    %% Media delete flow
+    WebUI -->|"POST /api/v1/media/delete\n(JWT + ownership check)"| API
+    API -->|"UPDATE status='deleted'"| MediaFiles
+    API -->|"🔑 api-gateway\nProduce Avro\n(FileDeleted)"| TopicMediaDelete
 
     subgraph "Real-Time OLAP (🔑 clickhouse-consumer)"
         CHKafka["Kafka Table Engine"]:::olap
