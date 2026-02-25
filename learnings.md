@@ -152,6 +152,18 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** When a MinIO webhook returns a non-2xx status, MinIO enqueues the event for retry (every ~3 seconds). This queue persists across container restarts and even survives deletion of the original object. A single failed webhook can generate thousands of retry attempts, dominating gateway logs and potentially blocking new event deliveries via queue saturation.
 **Decision:** When debugging MinIO webhook issues: (1) always check gateway logs for the actual user ID — if you see the SAME user retrying, it's a stale event, not a new upload; (2) restart MinIO AND re-run `setup-minio-webhook.sh` to clear the retry queue; (3) clear stale objects with `mc rm --recursive --force` before re-testing. The `httptest.ResponseRecorder` pattern in `mediaWebhookHandler` now returns proper HTTP status codes to MinIO, so successful events get acknowledged immediately (200) while failures get retried (400+).
 
+### 12. Flink `NoRestartBackoffTimeStrategy` Turns Transient Failures Into Silent Permanent Death
+
+**Observation:** When Flink's JDBC sink fails to reconnect to Postgres (e.g., due to connection slot exhaustion), the default `NoRestartBackoffTimeStrategy` prevents the job from restarting. The FlinkDeployment still reports `JOB STATUS: RUNNING / LIFECYCLE STATE: STABLE` in `kubectl get flinkdeployments`, masking the crash. Events pile up in Kafka with no consumer.
+
+**Decision:** Set `restart-strategy: exponential-delay` in `flinkConfiguration` with a 5s initial backoff, 5min max, and 10 max attempts. This recovers automatically from transient failures (JDBC timeouts, momentary connection exhaustion) without operator intervention. The retry count cap prevents infinite loops on permanent failures.
+
+### 13. Postgres Connection Exhaustion Kills Flink Silently
+
+**Observation:** Local Supabase has a limited connection pool. Long-running Flink JDBC sink sessions can exhaust it, causing `FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute`. Once this occurs, Flink's JDBC reconnect fails, triggering the restart strategy (or killing the job permanently if no strategy is set). The symptom is uploads succeeding (MinIO → Kafka event produced) but files never appearing in My Files and no Live Events notification.
+
+**Decision:** Add a `postgres-exporter` sidecar + Prometheus scrape + Grafana alert at 70+ active connections to catch this before it kills Flink. When it does occur: run `supabase db reset` to free connections, then restart the FlinkDeployment. Always diagnose silent upload failures by checking `kubectl logs` on the Flink pod — if the job crashed hours ago, events are sitting in Kafka waiting for replay on restart.
+
 ---
 
 ## 📦 Project Philosophy
