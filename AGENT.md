@@ -40,7 +40,7 @@ This platform is organized around explicit domain ownership. Violating these bou
 ## Key Knowledge
 - Query **ChromaDB** for past learnings before major architectural changes (skip if unavailable)
 - **Redpanda Auth:** SASL/SCRAM enabled via `redpanda-bootstrap.yaml`. `redpanda-auth-init` creates users/ACLs before Schema Registry starts. ACLs enforce `public.*` vs `internal.*` topic boundaries.
-- **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Skip for config/YAML, migrations, docs, one-line fixes.
+- **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Use `/feature-epic` for multi-domain features (breaks into domains, runs TDD per domain). Add `/agent-team` to either for cost-effective model selection and escalation. Skip TDD for config/YAML, migrations, docs, one-line fixes.
 - **Testing:** E2E tests in `tests/e2e/` are mandatory for every feature. Plan them explicitly in Phase 1 of `/feature-epic`. Run `task start` then `task test:e2e` after pipeline changes.
 - **Architecture Diagram:** Update `architecture.mmd` and regenerate `architecture.svg` (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes.
 - **Documentation:** After any change, update all affected docs: `README.md`, `architecture.md`, `architecture.mmd`, `AGENT.md`, `learnings.md`, `productionization.md`.
