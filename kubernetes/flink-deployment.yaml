@@ -9,6 +9,11 @@ spec:
   flinkVersion: v1_18
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "2"
+    restart-strategy: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 5 s
+    restart-strategy.exponential-delay.max-backoff: 5 min
+    restart-strategy.exponential-delay.multiplier: "2.0"
+    restart-strategy.exponential-delay.max-attempts: "10"
     metrics.reporter.stsd.class: org.apache.flink.metrics.statsd.StatsDReporter
     metrics.reporter.stsd.host: host.docker.internal
     metrics.reporter.stsd.port: "8125"

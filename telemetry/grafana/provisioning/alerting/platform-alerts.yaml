@@ -1,0 +1,95 @@
+apiVersion: 1
+
+# Contact points — add Slack webhook or email here for real notifications
+contactPoints:
+  - orgId: 1
+    name: platform-alerts
+    receivers:
+      - uid: platform-alerts-receiver
+        type: webhook
+        settings:
+          url: "http://localhost:9999/alert"  # Replace with Slack/email webhook in production
+          httpMethod: POST
+        disableResolveMessage: false
+
+# Notification policies
+policies:
+  - orgId: 1
+    receiver: platform-alerts
+    group_by: ["alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 1h
+
+# Alert rules
+groups:
+  - orgId: 1
+    name: platform-health
+    folder: Platform
+    interval: 1m
+    rules:
+
+      # Flink job uptime — fires if any job has been down for > 2 minutes
+      - uid: flink-job-down
+        title: "Flink Job Down"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: >
+                flink_jobmanager_job_uptime == 0
+                or absent(flink_jobmanager_job_uptime)
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Flink job is down"
+          description: "A Flink job has had uptime=0 for more than 2 minutes. Check kubectl logs for the JobManager pod."
+        labels:
+          severity: critical
+
+      # Postgres connections — fires if active connections exceed 80% of max
+      # Local Supabase default max_connections = 97 (pooled), threshold = ~78
+      - uid: postgres-connections-high
+        title: "Postgres Connections Near Limit"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: >
+                pg_stat_activity_count > 70
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "Postgres connection count is high"
+          description: "Active Postgres connections exceeded 70. Risk of FATAL: remaining connection slots reserved. Run: SELECT count(*), state FROM pg_stat_activity GROUP BY state;"
+        labels:
+          severity: warning
+
+      # Kafka consumer lag — fires if message-consumer lag exceeds KEDA threshold
+      - uid: kafka-consumer-lag-high
+        title: "Kafka Consumer Lag High"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: >
+                kafka_consumergroup_lag{topic="public.user.message.events"} > 20
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Kafka consumer lag is high"
+          description: "message-consumer lag on public.user.message.events exceeded 20. KEDA should be scaling — check consumer pod health."
+        labels:
+          severity: warning

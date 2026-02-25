@@ -3,4 +3,8 @@ global:
 
 # Enable OTel remote write
 remote_write: []
-# No scrape configs needed because OTel pushes to it
+
+scrape_configs:
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]

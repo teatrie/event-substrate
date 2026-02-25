@@ -175,6 +175,17 @@ services:
       - loki
       - jaeger
 
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+    ports:
+      - "9187:9187"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: clickhouse
