@@ -178,6 +178,56 @@ test.describe('Home view (authenticated)', () => {
         expect(mainJs).toContain('deleteFile')
     })
 
+    test('delete confirmation modal exists and is hidden by default', async ({ page }) => {
+        const modal = page.locator('#delete-modal')
+        await expect(modal).toBeHidden()
+
+        // Verify modal elements are present in DOM
+        await expect(page.locator('#delete-confirm-input')).toBeAttached()
+        await expect(page.locator('#delete-confirm-btn')).toBeAttached()
+        await expect(page.locator('#delete-cancel-btn')).toBeAttached()
+    })
+
+    test('delete confirmation modal requires typing "delete" to enable button', async ({ page }) => {
+        // Show the modal by manipulating display directly
+        await page.evaluate(() => {
+            document.getElementById('delete-modal').style.display = 'flex'
+            document.getElementById('delete-modal-filename').textContent = 'test-file.png'
+        })
+
+        const confirmBtn = page.locator('#delete-confirm-btn')
+        const confirmInput = page.locator('#delete-confirm-input')
+
+        // Button should be disabled initially
+        await expect(confirmBtn).toBeDisabled()
+
+        // Typing partial text keeps it disabled
+        await confirmInput.fill('del')
+        await expect(confirmBtn).toBeDisabled()
+
+        // Typing "delete" enables it
+        await confirmInput.fill('delete')
+        await expect(confirmBtn).toBeEnabled()
+
+        // Clearing disables it again
+        await confirmInput.fill('')
+        await expect(confirmBtn).toBeDisabled()
+
+        // Case-insensitive
+        await confirmInput.fill('DELETE')
+        await expect(confirmBtn).toBeEnabled()
+    })
+
+    test('delete confirmation modal cancel closes without action', async ({ page }) => {
+        await page.evaluate(() => {
+            document.getElementById('delete-modal').style.display = 'flex'
+        })
+
+        await expect(page.locator('#delete-modal')).toBeVisible()
+        await page.click('#delete-cancel-btn')
+        await expect(page.locator('#delete-modal')).toBeHidden()
+    })
+
     test('logout returns to auth view', async ({ page }) => {
         await page.click('#logout-btn')
         await expect(page.locator('#auth-view')).toBeVisible({ timeout: 5_000 })

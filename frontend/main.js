@@ -285,6 +285,51 @@ uploadForm.addEventListener('submit', async (e) => {
     }
 })
 
+// ─── Delete Confirmation Modal ───
+
+const deleteModal = document.getElementById('delete-modal')
+const deleteModalFilename = document.getElementById('delete-modal-filename')
+const deleteConfirmInput = document.getElementById('delete-confirm-input')
+const deleteConfirmBtn = document.getElementById('delete-confirm-btn')
+const deleteCancelBtn = document.getElementById('delete-cancel-btn')
+
+let pendingDeleteResolve = null
+
+deleteConfirmInput.addEventListener('input', () => {
+    deleteConfirmBtn.disabled = deleteConfirmInput.value.trim().toLowerCase() !== 'delete'
+})
+
+deleteCancelBtn.addEventListener('click', () => {
+    deleteModal.style.display = 'none'
+    deleteConfirmInput.value = ''
+    deleteConfirmBtn.disabled = true
+    if (pendingDeleteResolve) pendingDeleteResolve(false)
+    pendingDeleteResolve = null
+})
+
+deleteConfirmBtn.addEventListener('click', () => {
+    deleteModal.style.display = 'none'
+    deleteConfirmInput.value = ''
+    deleteConfirmBtn.disabled = true
+    if (pendingDeleteResolve) pendingDeleteResolve(true)
+    pendingDeleteResolve = null
+})
+
+deleteModal.addEventListener('click', (e) => {
+    if (e.target === deleteModal) deleteCancelBtn.click()
+})
+
+function confirmDelete(fileName) {
+    return new Promise((resolve) => {
+        pendingDeleteResolve = resolve
+        deleteModalFilename.textContent = fileName
+        deleteConfirmInput.value = ''
+        deleteConfirmBtn.disabled = true
+        deleteModal.style.display = 'flex'
+        deleteConfirmInput.focus()
+    })
+}
+
 // ─── Media Browser ───
 
 const CATEGORY_ICONS = { image: '🖼️', video: '🎬', audio: '🎵', unknown: '📄' }
@@ -334,6 +379,9 @@ async function refreshMediaBrowser() {
 
             card.querySelector('.btn-delete').addEventListener('click', async (e) => {
                 const btn = e.currentTarget
+                const confirmed = await confirmDelete(f.file_name)
+                if (!confirmed) return
+
                 btn.disabled = true
                 try {
                     const { data: { session } } = await supabase.auth.getSession()
