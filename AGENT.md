@@ -8,15 +8,6 @@ Service-specific conventions live in each sub-folder's `AGENT.md`:
 - `frontend/AGENT.md` — Vite, vitest, Playwright, media UI
 - `supabase/AGENT.md` — migrations, RLS, Realtime, event types
 
-## Tech Stack
-- **Go** microservices (`api-gateway`, `message-consumer`) in `go-services/`
-- **Apache Flink** SQL + Python stream processors in `flink_jobs/`, `pyflink_jobs/`
-- **Redpanda** (Kafka-compatible) broker with **Confluent Avro** serialization
-- **Supabase** (Postgres + Auth + Realtime) in `supabase/`
-- **ClickHouse** OLAP warehouse, **MinIO** + **Nessie** data lake
-- **Vite** vanilla JS frontend in `frontend/`
-- **Kubernetes** manifests in `kubernetes/`, Docker Compose for infra
-
 ## Domain Boundaries (DDD)
 
 This platform is organized around explicit domain ownership. Violating these boundaries creates tight coupling and breaks the event-driven contract:
