@@ -55,12 +55,6 @@ This platform is organized around explicit domain ownership. Violating these bou
 6. **Always run `task test:e2e`** after pipeline-affecting changes.
 7. **Persistent failures:** `task purge && task init`
 
-## Slash Commands (`.claude/commands/`)
-- `/mermaid-to-svg` — convert `.mmd` files to validated SVG
-- `/feature-epic` — multi-domain feature planning with TDD
-- `/tdd-execute` — Red-Green-Refactor via subagents
-- `/agent-team` — cost-effective multi-agent orchestration (model selection + escalation)
-
 ## Key Knowledge
 - Query **ChromaDB** for past learnings before major architectural changes (skip if unavailable)
 - **Redpanda Auth:** SASL/SCRAM enabled via `redpanda-bootstrap.yaml`. `redpanda-auth-init` creates users/ACLs before Schema Registry starts. ACLs enforce `public.*` vs `internal.*` topic boundaries.
