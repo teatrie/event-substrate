@@ -17,15 +17,6 @@ Service-specific conventions live in each sub-folder's `AGENT.md`:
 - **Vite** vanilla JS frontend in `frontend/`
 - **Kubernetes** manifests in `kubernetes/`, Docker Compose for infra
 
-## Commands
-```
-task init        # First-time full setup
-task start       # Start platform (idempotent — reconciles schemas, topics, configmaps)
-task test:e2e    # Run all end-to-end pipeline tests
-task purge       # Nuclear teardown — destroy all state, then run 'task init'
-task shutdown    # Stop everything
-```
-
 ## Domain Boundaries (DDD)
 
 This platform is organized around explicit domain ownership. Violating these boundaries creates tight coupling and breaks the event-driven contract:
