@@ -26,6 +26,16 @@ task purge       # Nuclear teardown — destroy all state, then run 'task init'
 task shutdown    # Stop everything
 ```
 
+## Domain Boundaries (DDD)
+
+This platform is organized around explicit domain ownership. Violating these boundaries creates tight coupling and breaks the event-driven contract:
+
+- **Event naming:** `{domain}.{entity}.{action}` — e.g., `identity.login`, `user.message`, `credit.balance_changed`, `media.file.uploaded`
+- **Topic ownership:** Each domain writes only to its own `public.{domain}.*` topics. No service writes directly to another domain's topics.
+- **Cross-domain communication:** Always via Kafka topics — never via direct DB reads across domain tables. Flink processors consume events, not tables.
+- **Schema ownership:** Each domain owns its Avro schemas under `avro/{visibility}/{domain}/`. Schema changes are breaking changes and require a new topic subject.
+- **Egress exception:** All processors funnel notifications through `user_notifications` (unified egress) — this is the single sanctioned cross-domain write path.
+
 ## Cross-Cutting Conventions
 
 **Kafka Authentication:** Every service authenticates to Redpanda via SASL/SCRAM-SHA-256 with least-privilege ACLs. Env vars: `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` (+ `KAFKA_SECURITY_PROTOCOL` for Flink). Identities and ACLs are in `scripts/setup-redpanda-auth*.sh`. To swap to OAUTHBEARER in production, change the mechanism env var — no code changes needed.
