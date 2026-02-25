@@ -13,6 +13,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/signal"
 	"strings"
@@ -452,11 +453,30 @@ func main() {
 	mux.HandleFunc("/webhooks/", webhookHandler)
 	mux.HandleFunc("/api/v1/events/", externalHandler)
 
-	// Wire upload handler with real Postgres + MinIO dependencies
-	if uploadHandler := initUploadHandler(); uploadHandler != nil {
-		mux.Handle("/api/v1/media/upload-url", uploadHandler)
+	// produceEventDirect builds a JSON payload and sends it through the standard
+	// Avro-encoding pipeline (schema registry lookup → Avro encode → Kafka produce).
+	produceEventDirect := func(ctx context.Context, topic string, payload map[string]any) error {
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("failed to marshal event payload: %w", err)
+		}
+		syntheticReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/", strings.NewReader(string(payloadBytes)))
+		syntheticReq.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		processAndProduceEvent(ctx, recorder, syntheticReq, topic)
+		if recorder.Code >= 400 {
+			return fmt.Errorf("event production failed for topic %s: status %d", topic, recorder.Code)
+		}
+		return nil
+	}
+
+	// Wire media handlers with shared Postgres + MinIO dependencies
+	if handlers := initMediaHandlers(produceEventDirect); handlers != nil {
+		mux.Handle("/api/v1/media/upload-url", handlers.Upload)
+		mux.Handle("/api/v1/media/download-url", handlers.Download)
+		mux.Handle("/api/v1/media/delete", handlers.Delete)
 	} else {
-		log.Println("WARNING: Upload handler not initialized — /api/v1/media/upload-url will be unavailable")
+		log.Println("WARNING: Media handlers not initialized — /api/v1/media/* will be unavailable")
 	}
 
 	server := &http.Server{Addr: ":8080", Handler: corsMiddleware(mux)}

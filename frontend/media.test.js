@@ -7,6 +7,8 @@ import {
   isAllowedMediaType,
   getMediaCategory,
   InsufficientCreditsError,
+  requestDownloadUrl,
+  deleteFile,
 } from './media.js'
 
 // ---------------------------------------------------------------------------
@@ -544,5 +546,264 @@ describe('getMediaCategory', () => {
 
   it('returns "unknown" for undefined', () => {
     expect(getMediaCategory(undefined)).toBe('unknown')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// requestDownloadUrl
+// ---------------------------------------------------------------------------
+describe('requestDownloadUrl', () => {
+  const apiGatewayUrl = 'http://localhost:8080'
+  const token = 'test-jwt-token'
+  const filePath = 'uploads/photo.jpg'
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('calls correct endpoint /api/v1/media/download-url with POST method', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        download_url: 'https://storage.example.com/download/abc',
+        expires_in: 3600,
+      }),
+    })
+
+    await requestDownloadUrl(apiGatewayUrl, token, filePath)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/media/download-url',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+  })
+
+  it('sends Authorization Bearer header with token', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        download_url: 'https://storage.example.com/download/abc',
+        expires_in: 3600,
+      }),
+    })
+
+    await requestDownloadUrl(apiGatewayUrl, token, filePath)
+
+    const callArgs = globalThis.fetch.mock.calls[0][1]
+    expect(callArgs.headers).toEqual(
+      expect.objectContaining({
+        Authorization: 'Bearer test-jwt-token',
+      }),
+    )
+  })
+
+  it('sends file_path in request body', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        download_url: 'https://storage.example.com/download/abc',
+        expires_in: 3600,
+      }),
+    })
+
+    await requestDownloadUrl(apiGatewayUrl, token, filePath)
+
+    const callArgs = globalThis.fetch.mock.calls[0][1]
+    expect(JSON.parse(callArgs.body)).toEqual({ file_path: 'uploads/photo.jpg' })
+  })
+
+  it('returns parsed JSON response with download_url and expires_in', async () => {
+    const responsePayload = {
+      download_url: 'https://storage.example.com/download/abc',
+      expires_in: 3600,
+    }
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => responsePayload,
+    })
+
+    const result = await requestDownloadUrl(apiGatewayUrl, token, filePath)
+
+    expect(result).toEqual(responsePayload)
+    expect(result).toHaveProperty('download_url')
+    expect(result).toHaveProperty('expires_in')
+  })
+
+  it('throws on 404 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => 'Not Found',
+    })
+
+    await expect(
+      requestDownloadUrl(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('throws on 500 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    })
+
+    await expect(
+      requestDownloadUrl(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('handles network failure', async () => {
+    globalThis.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    await expect(
+      requestDownloadUrl(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('constructs URL without double slashes when apiGatewayUrl has trailing slash', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ download_url: '', expires_in: 0 }),
+    })
+
+    await requestDownloadUrl('http://gateway:9090/', token, filePath)
+
+    const calledUrl = globalThis.fetch.mock.calls[0][0]
+    expect(calledUrl).not.toContain('//api')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// deleteFile
+// ---------------------------------------------------------------------------
+describe('deleteFile', () => {
+  const apiGatewayUrl = 'http://localhost:8080'
+  const token = 'test-jwt-token'
+  const filePath = 'uploads/photo.jpg'
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('calls correct endpoint /api/v1/media/delete with POST method', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    })
+
+    await deleteFile(apiGatewayUrl, token, filePath)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/media/delete',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+  })
+
+  it('sends Authorization Bearer header with token', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    })
+
+    await deleteFile(apiGatewayUrl, token, filePath)
+
+    const callArgs = globalThis.fetch.mock.calls[0][1]
+    expect(callArgs.headers).toEqual(
+      expect.objectContaining({
+        Authorization: 'Bearer test-jwt-token',
+      }),
+    )
+  })
+
+  it('sends file_path in request body', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    })
+
+    await deleteFile(apiGatewayUrl, token, filePath)
+
+    const callArgs = globalThis.fetch.mock.calls[0][1]
+    expect(JSON.parse(callArgs.body)).toEqual({ file_path: 'uploads/photo.jpg' })
+  })
+
+  it('returns parsed JSON response with success: true', async () => {
+    const responsePayload = { success: true }
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => responsePayload,
+    })
+
+    const result = await deleteFile(apiGatewayUrl, token, filePath)
+
+    expect(result).toEqual(responsePayload)
+    expect(result).toHaveProperty('success', true)
+  })
+
+  it('throws on 404 status (file not found)', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => 'Not Found',
+    })
+
+    await expect(
+      deleteFile(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('throws on 500 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    })
+
+    await expect(
+      deleteFile(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('handles network failure', async () => {
+    globalThis.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    await expect(
+      deleteFile(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('constructs URL without double slashes when apiGatewayUrl has trailing slash', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    })
+
+    await deleteFile('http://gateway:9090/', token, filePath)
+
+    const calledUrl = globalThis.fetch.mock.calls[0][0]
+    expect(calledUrl).not.toContain('//api')
   })
 })

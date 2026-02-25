@@ -71,6 +71,8 @@ describe('main.js module wiring', () => {
         'isAllowedMediaType',
         'getMediaCategory',
         'InsufficientCreditsError',
+        'requestDownloadUrl',
+        'deleteFile',
     ]
 
     for (const fn of requiredImports) {

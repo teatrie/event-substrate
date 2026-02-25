@@ -42,6 +42,61 @@ func (m *MinioURLSigner) GeneratePresignedPUT(bucket, key string, expiry time.Du
 	return presignedURL.String(), nil
 }
 
+func (m *MinioURLSigner) GeneratePresignedGET(bucket, key string, expiry time.Duration) (string, error) {
+	presignedURL, err := m.Client.PresignedGetObject(context.Background(), bucket, key, expiry, nil)
+	if err != nil {
+		return "", fmt.Errorf("presigned GET URL generation failed: %w", err)
+	}
+	return presignedURL.String(), nil
+}
+
+// PostgresFileStore queries media_files table in Supabase for ownership and soft-delete.
+type PostgresFileStore struct {
+	DB *sql.DB
+}
+
+func (p *PostgresFileStore) VerifyOwnership(ctx context.Context, filePath, userID string) (bool, error) {
+	var count int
+	err := p.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM media_files WHERE file_path = $1 AND user_id = $2 AND status = 'active'",
+		filePath, userID,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (p *PostgresFileStore) SoftDelete(ctx context.Context, filePath, userID string) (bool, error) {
+	result, err := p.DB.ExecContext(ctx,
+		"UPDATE media_files SET status = 'deleted' WHERE file_path = $1 AND user_id = $2 AND status = 'active'",
+		filePath, userID,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (p *PostgresFileStore) GetFileMetadata(ctx context.Context, filePath, userID string) (*FileMetadata, error) {
+	var meta FileMetadata
+	err := p.DB.QueryRowContext(ctx,
+		"SELECT file_path, file_name, media_type, file_size, user_id FROM media_files WHERE file_path = $1 AND user_id = $2 AND status = 'active'",
+		filePath, userID,
+	).Scan(&meta.FilePath, &meta.FileName, &meta.MediaType, &meta.FileSize, &meta.UserID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &meta, nil
+}
+
 func getEnvOrDefault(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -49,9 +104,16 @@ func getEnvOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
-// initUploadHandler creates and returns a fully wired UploadHandler.
+// MediaHandlers holds all media-related HTTP handlers sharing common dependencies.
+type MediaHandlers struct {
+	Upload   *UploadHandler
+	Download *DownloadHandler
+	Delete   *DeleteHandler
+}
+
+// initMediaHandlers creates and returns all media handlers sharing a single DB pool and MinIO client.
 // Returns nil if required dependencies can't be reached (non-fatal — gateway still serves other routes).
-func initUploadHandler() *UploadHandler {
+func initMediaHandlers(produceEvent EventProducer) *MediaHandlers {
 	dbURL := getEnvOrDefault("SUPABASE_DB_URL", "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable")
 	storageEndpoint := getEnvOrDefault("MINIO_ENDPOINT", "host.docker.internal:9000")
 	// MINIO_PUBLIC_ENDPOINT is the browser-reachable MinIO address used for presigned URLs.
@@ -63,10 +125,10 @@ func initUploadHandler() *UploadHandler {
 	storageBucket := getEnvOrDefault("MINIO_BUCKET", "media-uploads")
 	storageUseSSL := getEnvOrDefault("MINIO_USE_SSL", "false") == "true"
 
-	// Connect to Postgres for credit balance queries
+	// Connect to Postgres for credit balance and file metadata queries
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Printf("WARNING: Failed to open DB for upload handler: %v", err)
+		log.Printf("WARNING: Failed to open DB for media handlers: %v", err)
 		return nil
 	}
 	db.SetMaxOpenConns(5)
@@ -74,7 +136,7 @@ func initUploadHandler() *UploadHandler {
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
-		log.Printf("WARNING: DB ping failed for upload handler: %v", err)
+		log.Printf("WARNING: DB ping failed for media handlers: %v", err)
 		return nil
 	}
 
@@ -93,18 +155,36 @@ func initUploadHandler() *UploadHandler {
 		return nil
 	}
 
-	log.Printf("Upload handler initialized: bucket=%s endpoint=%s (public=%s)", storageBucket, storageEndpoint, storagePublicEndpoint)
+	config := &UploadConfig{
+		StorageBucketName: storageBucket,
+		StorageEndpoint:   storageEndpoint,
+		StorageAccessKey:  storageAccessKey,
+		StorageSecretKey:  storageSecretKey,
+		StorageURLExpiry:  900,
+		SupabaseDBURL:     dbURL,
+	}
 
-	return &UploadHandler{
-		Credits: &PostgresCreditChecker{DB: db},
-		Signer:  &MinioURLSigner{Client: minioClient},
-		Config: &UploadConfig{
-			StorageBucketName: storageBucket,
-			StorageEndpoint:   storageEndpoint,
-			StorageAccessKey:  storageAccessKey,
-			StorageSecretKey:  storageSecretKey,
-			StorageURLExpiry:  900,
-			SupabaseDBURL:     dbURL,
+	signer := &MinioURLSigner{Client: minioClient}
+	fileStore := &PostgresFileStore{DB: db}
+
+	log.Printf("Media handlers initialized: bucket=%s endpoint=%s (public=%s)", storageBucket, storageEndpoint, storagePublicEndpoint)
+
+	return &MediaHandlers{
+		Upload: &UploadHandler{
+			Credits: &PostgresCreditChecker{DB: db},
+			Signer:  signer,
+			Config:  config,
+		},
+		Download: &DownloadHandler{
+			Files:        fileStore,
+			Signer:       signer,
+			Config:       config,
+			ProduceEvent: produceEvent,
+		},
+		Delete: &DeleteHandler{
+			Files:        fileStore,
+			Config:       config,
+			ProduceEvent: produceEvent,
 		},
 	}
 }

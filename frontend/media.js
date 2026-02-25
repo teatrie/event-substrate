@@ -75,3 +75,35 @@ export function getMediaCategory(mediaType) {
   const prefix = mediaType.split('/')[0]
   return MEDIA_CATEGORIES.has(prefix) ? prefix : 'unknown'
 }
+
+export async function requestDownloadUrl(apiGatewayUrl, token, filePath) {
+  const base = apiGatewayUrl.replace(/\/+$/, '')
+  const response = await fetch(`${base}/api/v1/media/download-url`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ file_path: filePath }),
+  })
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteFile(apiGatewayUrl, token, filePath) {
+  const base = apiGatewayUrl.replace(/\/+$/, '')
+  const response = await fetch(`${base}/api/v1/media/delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ file_path: filePath }),
+  })
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}

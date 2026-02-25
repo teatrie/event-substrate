@@ -33,6 +33,7 @@ TESTS=(
   test_rls_isolation.mjs
   test_credit_economy.mjs
   test_media_upload.mjs
+  test_media_download_delete.mjs
 )
 
 PASSED=0

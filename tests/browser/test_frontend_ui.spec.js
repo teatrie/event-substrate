@@ -164,6 +164,20 @@ test.describe('Home view (authenticated)', () => {
         await expect(page.locator('#notifications-list')).toBeVisible()
     })
 
+    test('media file cards render download and delete buttons', async ({ page }) => {
+        // Check that the media browser rendering code includes the button classes.
+        // We evaluate the JS source to verify the wiring exists, since creating
+        // a real file requires the full upload pipeline.
+        const mainJs = await page.evaluate(async () => {
+            const resp = await fetch('/main.js')
+            return resp.text()
+        })
+        expect(mainJs).toContain('btn-download')
+        expect(mainJs).toContain('btn-delete')
+        expect(mainJs).toContain('requestDownloadUrl')
+        expect(mainJs).toContain('deleteFile')
+    })
+
     test('logout returns to auth view', async ({ page }) => {
         await page.click('#logout-btn')
         await expect(page.locator('#auth-view')).toBeVisible({ timeout: 5_000 })

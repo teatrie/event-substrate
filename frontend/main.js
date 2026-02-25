@@ -1,6 +1,6 @@
 import './style.css'
 import { createClient } from '@supabase/supabase-js'
-import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError } from './media.js'
+import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError, requestDownloadUrl, deleteFile } from './media.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -309,7 +309,46 @@ async function refreshMediaBrowser() {
                     <div class="file-name" title="${f.file_name}">${f.file_name}</div>
                     <div class="file-meta">${formatFileSize(f.file_size)} · ${cat} · ${new Date(f.upload_time).toLocaleString()}</div>
                 </div>
+                <div class="file-actions">
+                    <button class="btn-icon btn-download" data-file-path="${f.file_path}" title="Download">⬇️</button>
+                    <button class="btn-icon btn-delete" data-file-path="${f.file_path}" title="Delete">🗑️</button>
+                </div>
             `
+
+            card.querySelector('.btn-download').addEventListener('click', async (e) => {
+                const btn = e.currentTarget
+                btn.disabled = true
+                try {
+                    const { data: { session } } = await supabase.auth.getSession()
+                    if (!session) throw new Error('Not authenticated')
+                    const { download_url } = await requestDownloadUrl(apiGatewayUrl, session.access_token, f.file_path)
+                    window.open(download_url, '_blank')
+                } catch (err) {
+                    console.error('Download failed:', err)
+                    uploadStatus.textContent = `Download failed: ${err.message}`
+                    uploadStatus.className = 'upload-status error'
+                } finally {
+                    btn.disabled = false
+                }
+            })
+
+            card.querySelector('.btn-delete').addEventListener('click', async (e) => {
+                const btn = e.currentTarget
+                btn.disabled = true
+                try {
+                    const { data: { session } } = await supabase.auth.getSession()
+                    if (!session) throw new Error('Not authenticated')
+                    await deleteFile(apiGatewayUrl, session.access_token, f.file_path)
+                    await Promise.all([refreshCredits(), refreshMediaBrowser()])
+                } catch (err) {
+                    console.error('Delete failed:', err)
+                    uploadStatus.textContent = `Delete failed: ${err.message}`
+                    uploadStatus.className = 'upload-status error'
+                } finally {
+                    btn.disabled = false
+                }
+            })
+
             mediaList.appendChild(card)
         })
     } catch (err) {
