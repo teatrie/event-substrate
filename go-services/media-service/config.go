@@ -21,6 +21,7 @@ type Config struct {
 	KafkaSASLPassword   string `mapstructure:"KAFKA_SASL_PASSWORD"`
 	UploadURLExpiry     int    `mapstructure:"UPLOAD_URL_EXPIRY"`
 	DownloadURLExpiry   int    `mapstructure:"DOWNLOAD_URL_EXPIRY"`
+	WebhookPort         int    `mapstructure:"WEBHOOK_PORT"`
 }
 
 func loadConfig() (*Config, error) {
@@ -37,6 +38,7 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("KAFKA_SASL_PASSWORD", "")
 	viper.SetDefault("UPLOAD_URL_EXPIRY", 900)
 	viper.SetDefault("DOWNLOAD_URL_EXPIRY", 3600)
+	viper.SetDefault("WEBHOOK_PORT", 8090)
 
 	viper.AutomaticEnv()
 

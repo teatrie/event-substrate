@@ -449,7 +449,6 @@ func main() {
 
 	// 3. HTTP Server configuration - Splitting branches cleanly for strict access matrices
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhooks/media-upload", mediaWebhookHandler)
 	mux.HandleFunc("/webhooks/", webhookHandler)
 	mux.HandleFunc("/api/v1/events/", externalHandler)
 

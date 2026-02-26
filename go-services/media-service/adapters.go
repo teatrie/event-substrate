@@ -49,6 +49,32 @@ func (m *minioObjectRemover) RemoveObject(ctx context.Context, bucket, objectKey
 	return m.client.RemoveObject(ctx, bucket, objectKey, minio.RemoveObjectOptions{})
 }
 
+// minioObjectMover implements ObjectMover using CopyObject + RemoveObject.
+type minioObjectMover struct {
+	client *minio.Client
+}
+
+func (m *minioObjectMover) MoveObject(ctx context.Context, bucket, srcKey, dstKey string) error {
+	src := minio.CopySrcOptions{Bucket: bucket, Object: srcKey}
+	dst := minio.CopyDestOptions{Bucket: bucket, Object: dstKey}
+	_, err := m.client.CopyObject(ctx, dst, src)
+	if err != nil {
+		// Check if source is missing — idempotent if dest already exists
+		errResp := minio.ToErrorResponse(err)
+		if errResp.Code == "NoSuchKey" {
+			// Source gone — check if dest exists (move already completed)
+			_, statErr := m.client.StatObject(ctx, bucket, dstKey, minio.StatObjectOptions{})
+			if statErr == nil {
+				return nil // Dest exists, move already done
+			}
+		}
+		return fmt.Errorf("copy object %s→%s: %w", srcKey, dstKey, err)
+	}
+	// Remove source after successful copy
+	_ = m.client.RemoveObject(ctx, bucket, srcKey, minio.RemoveObjectOptions{})
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // DB adapters
 // ---------------------------------------------------------------------------

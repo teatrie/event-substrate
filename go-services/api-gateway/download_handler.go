@@ -55,7 +55,7 @@ func (h *DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Generate presigned GET URL
 	expiry := time.Duration(h.Config.StorageURLExpiry) * time.Second
-	downloadURL, err := h.Signer.GeneratePresignedGET(h.Config.StorageBucketName, req.FilePath, expiry)
+	downloadURL, err := h.Signer.GeneratePresignedGET(h.Config.StorageBucketName, meta.FilePath, expiry)
 	if err != nil {
 		log.Printf("Download handler: presigned GET generation failed: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

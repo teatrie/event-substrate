@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -47,10 +48,10 @@ func getAvroSchema(ctx context.Context, id int) (avro.Schema, error) {
 // Topics consumed by the media service.
 var consumeTopics = []string{
 	"public.media.upload.approved",
-	"public.media.upload.events",
 	"public.media.expired.events",
 	"internal.media.download.intent",
 	"internal.media.delete.intent",
+	"internal.media.upload.retry",
 }
 
 func main() {
@@ -132,6 +133,7 @@ func main() {
 	objectRemover := &minioObjectRemover{client: minioClient}
 	fileStore := &dbFileStore{db: db}
 	eventProducer := &avroKafkaProducer{client: producer}
+	objectMover := &minioObjectMover{client: minioClient}
 
 	// Wire handlers into the TopicRouter
 	router := NewTopicRouter(map[string]MessageHandler{
@@ -159,7 +161,32 @@ func main() {
 			objectRemover,
 			cfg.MinioBucket,
 		),
+		"internal.media.upload.retry": NewRetryHandler(
+			objectMover,
+			eventProducer,
+			cfg.MinioBucket,
+		),
 	})
+
+	// HTTP server for MinIO webhook callbacks
+	uploadWebhook := NewUploadWebhookHandler(eventProducer, objectMover, cfg.MinioBucket)
+	fileReadyWebhook := NewFileReadyWebhookHandler(eventProducer)
+
+	webhookMux := http.NewServeMux()
+	webhookMux.Handle("/webhooks/media-upload", uploadWebhook)
+	webhookMux.Handle("/webhooks/file-ready", fileReadyWebhook)
+
+	webhookServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.WebhookPort),
+		Handler: webhookMux,
+	}
+
+	go func() {
+		log.Printf("Webhook HTTP server listening on :%d", cfg.WebhookPort)
+		if err := webhookServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Webhook server error: %v", err)
+		}
+	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
