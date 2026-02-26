@@ -1,0 +1,79 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: credit-check-processor
+  namespace: default
+spec:
+  image: pyflink-custom:1.18.0
+  imagePullPolicy: Never
+  flinkVersion: v1_18
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    restart-strategy: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 5 s
+    restart-strategy.exponential-delay.max-backoff: 5 min
+    restart-strategy.exponential-delay.multiplier: "2.0"
+    restart-strategy.exponential-delay.max-attempts: "10"
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1024m"
+      cpu: 1
+  taskManager:
+    resource:
+      memory: "1024m"
+      cpu: 1
+  podTemplate:
+    spec:
+      initContainers:
+        - name: fetch-dependencies
+          image: curlimages/curl:latest
+          command:
+            - "sh"
+            - "-c"
+            - "curl -L -o /opt/flink/usrlib/postgresql-42.7.2.jar https://jdbc.postgresql.org/download/postgresql-42.7.2.jar && curl -L -o /opt/flink/usrlib/flink-sql-connector-kafka-3.0.1-1.18.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.0.1-1.18/flink-sql-connector-kafka-3.0.1-1.18.jar && curl -L -o /opt/flink/usrlib/flink-sql-avro-confluent-registry-1.18.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-avro-confluent-registry/1.18.0/flink-sql-avro-confluent-registry-1.18.0.jar && curl -L -o /opt/flink/usrlib/kafka-schema-registry-client-7.6.0.jar https://packages.confluent.io/maven/io/confluent/kafka-schema-registry-client/7.6.0/kafka-schema-registry-client-7.6.0.jar && curl -L -o /opt/flink/usrlib/flink-avro-1.18.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-avro/1.18.0/flink-avro-1.18.0.jar"
+          volumeMounts:
+            - name: usrlib-volume
+              mountPath: /opt/flink/usrlib
+      containers:
+        - name: flink-main-container
+          env:
+            - name: REDPANDA_BROKERS
+              value: "host.docker.internal:9092"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://host.docker.internal:8081"
+            - name: SUPABASE_DB_HOST
+              value: "host.docker.internal"
+            - name: SUPABASE_DB_PORT
+              value: "54322"
+            - name: SUPABASE_DB_NAME
+              value: "postgres"
+            - name: SUPABASE_DB_USER
+              value: "postgres"
+            - name: SUPABASE_DB_PASSWORD
+              value: "postgres"
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: KAFKA_SASL_MECHANISM
+              value: "SCRAM-SHA-256"
+            - name: KAFKA_SASL_USERNAME
+              value: "flink-processor"
+            - name: KAFKA_SASL_PASSWORD
+              value: "flink-processor-local-pw"
+          volumeMounts:
+            - name: credit-check-scripts
+              mountPath: /opt/flink/pyflink-scripts
+            - name: usrlib-volume
+              mountPath: /opt/flink/usrlib
+      volumes:
+        - name: credit-check-scripts
+          configMap:
+            name: credit-check-scripts
+        - name: usrlib-volume
+          emptyDir: {}
+  job:
+    jarURI: local:///opt/flink/opt/flink-python_2.12-1.18.0.jar
+    entryClass: "org.apache.flink.client.python.PythonGatewayServer"
+    args: ["-py", "/opt/flink/pyflink-scripts/credit_check_processor.py"]
+    parallelism: 1
+    upgradeMode: stateless

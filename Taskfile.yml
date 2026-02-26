@@ -3,6 +3,8 @@ version: '3'
 vars:
   GATEWAY_IMAGE: event-substrate-api-gateway:latest
   CONSUMER_IMAGE: event-substrate-message-consumer:latest
+  MEDIA_SERVICE_IMAGE: event-substrate-media-service:latest
+  PYFLINK_IMAGE: pyflink-custom:1.18.0
 
 tasks:
   # ---------------------------------------------------------------------------
@@ -45,9 +47,25 @@ tasks:
     cmds:
       - docker build -t {{.CONSUMER_IMAGE}} ./go-services/message-consumer
 
+  build:media-service:
+    desc: Build Media Service Docker image
+    sources:
+      - go-services/media-service/*.go
+      - go-services/media-service/go.*
+      - go-services/media-service/Dockerfile
+    cmds:
+      - docker build -t {{.MEDIA_SERVICE_IMAGE}} ./go-services/media-service
+
+  build:pyflink:
+    desc: Build custom PyFlink Docker image (includes psycopg2)
+    sources:
+      - Dockerfile.pyflink
+    cmds:
+      - docker build -t {{.PYFLINK_IMAGE}} -f Dockerfile.pyflink .
+
   build:
     desc: Build all Go service images (only if source changed)
-    deps: [build:gateway, build:consumer]
+    deps: [build:gateway, build:consumer, build:media-service]
 
   # ---------------------------------------------------------------------------
   # Infrastructure
@@ -119,10 +137,19 @@ tasks:
           echo "  ✅ ${subject}"
         done
       - |
-        curl -s -o /dev/null -X PUT \
-          http://localhost:8081/config/internal.platform.unified.events-value \
-          -H "Content-Type: application/json" \
-          -d '{"compatibility": "NONE"}'
+        # Subjects where Flink's avro-confluent format auto-generates schema names
+        # that differ from the pre-registered Avro record names. NONE compatibility
+        # allows Flink to register its auto-generated schema without NAME_MISMATCH.
+        for subject in \
+          internal.platform.unified.events-value \
+          public.media.upload.approved-value \
+          public.media.upload.rejected-value \
+          public.media.download.rejected-value; do
+          curl -s -o /dev/null -X PUT \
+            "http://localhost:8081/config/${subject}" \
+            -H "Content-Type: application/json" \
+            -d '{"compatibility": "NONE"}'
+        done
 
   topics:create:
     desc: Create Kafka topics and enable Iceberg (auto-discovered from avro/)
@@ -135,6 +162,14 @@ tasks:
           docker exec redpanda rpk topic alter-config "$topic" \
             --set redpanda.iceberg.mode=value_schema_id_prefix $SU
         done
+
+  # ---------------------------------------------------------------------------
+  # MinIO
+  # ---------------------------------------------------------------------------
+  minio:setup-webhook:
+    desc: Configure MinIO bucket webhook for media upload notifications
+    cmds:
+      - bash scripts/setup-minio-webhook.sh
 
   # ---------------------------------------------------------------------------
   # ClickHouse
@@ -166,7 +201,7 @@ tasks:
     sources:
       - flink_jobs/*.sql
       - flink_jobs/sql_runner.py
-      - pyflink_jobs/echo_processor.py
+      - pyflink_jobs/*.py
     cmds:
       - kubectl create serviceaccount flink --dry-run=client -o yaml | kubectl apply -f -
       - >-
@@ -176,19 +211,30 @@ tasks:
         --from-file=signout_events_processor.sql=flink_jobs/signout_events_processor.sql
         --from-file=unified_events_processor.sql=flink_jobs/unified_events_processor.sql
         --from-file=credit_balance_processor.sql=flink_jobs/credit_balance_processor.sql
+        --from-file=media_notification_processor.sql=flink_jobs/media_notification_processor.sql
         --from-file=sql_runner.py=flink_jobs/sql_runner.py
         --dry-run=client -o yaml | kubectl apply -f -
       - >-
         kubectl create configmap pyflink-echo-scripts
         --from-file=echo_processor.py=pyflink_jobs/echo_processor.py
         --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap credit-check-scripts
+        --from-file=credit_check_processor.py=pyflink_jobs/credit_check_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap ttl-expiry-scripts
+        --from-file=ttl_expiry_processor.py=pyflink_jobs/ttl_expiry_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
 
   k8s:flink:
     desc: Deploy Flink jobs to Kubernetes
-    deps: [k8s:configmaps]
+    deps: [k8s:configmaps, build:pyflink]
     cmds:
       - kubectl apply -f kubernetes/flink-deployment.yaml
       - kubectl apply -f kubernetes/pyflink-deployment.yaml
+      - kubectl apply -f kubernetes/credit-check-deployment.yaml
+      - kubectl apply -f kubernetes/ttl-expiry-deployment.yaml
 
   k8s:go-services:
     desc: Build and deploy Go microservices to Kubernetes
@@ -210,6 +256,7 @@ tasks:
       - task: infra:supabase
       - task: infra:docker
       - task: auth:setup
+      - task: minio:setup-webhook
       - task: wait:schema-registry
       - task: schemas:register
       - task: topics:create
@@ -231,6 +278,7 @@ tasks:
       - task: infra:supabase
       - task: infra:docker
       - task: auth:setup
+      - task: minio:setup-webhook
       - task: wait:schema-registry
       - task: schemas:register
       - task: topics:create
@@ -249,6 +297,8 @@ tasks:
       - kubectl delete -f kubernetes/go-services/ -n go-microservices --ignore-not-found || true
       - kubectl delete -f kubernetes/flink-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/pyflink-deployment.yaml --ignore-not-found
+      - kubectl delete -f kubernetes/credit-check-deployment.yaml --ignore-not-found
+      - kubectl delete -f kubernetes/ttl-expiry-deployment.yaml --ignore-not-found
       - docker compose down
       - supabase stop
       - echo "✅ Shutdown complete."
@@ -260,7 +310,7 @@ tasks:
       - echo "🧹 Destroying all persistent state..."
       - docker compose down -v
       - task: clean
-      - supabase db reset
+      - supabase db reset || true
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
   # ---------------------------------------------------------------------------

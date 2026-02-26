@@ -14,6 +14,7 @@ rpk acl user create flink-processor    --password 'flink-processor-local-pw'   -
 rpk acl user create message-consumer   --password 'message-consumer-local-pw'  --mechanism SCRAM-SHA-256 --api-urls "$ADMIN_URL"
 rpk acl user create schema-admin       --password 'schema-admin-local-pw'      --mechanism SCRAM-SHA-256 --api-urls "$ADMIN_URL"
 rpk acl user create clickhouse-consumer --password 'clickhouse-local-pw'       --mechanism SCRAM-SHA-256 --api-urls "$ADMIN_URL"
+rpk acl user create media-service      --password 'media-service-local-pw'     --mechanism SCRAM-SHA-256 --api-urls "$ADMIN_URL"
 
 echo "=== Waiting for SCRAM credentials to propagate ==="
 max_retries=15; count=0
@@ -27,15 +28,20 @@ done
 
 echo "=== Setting Up ACLs ==="
 
-# api-gateway: Write to public.* topics only
+# api-gateway: Write to public.* and internal.media.* topics (intent events)
 rpk acl create --allow-principal User:api-gateway \
   --operation Write --operation Describe \
   --topic 'public.' --resource-pattern-type prefixed \
   --brokers "$BROKERS" $SU_FLAGS
 
-# flink-processor: Read public.*, Read/Write internal.*
+rpk acl create --allow-principal User:api-gateway \
+  --operation Write --operation Describe \
+  --topic 'internal.media.' --resource-pattern-type prefixed \
+  --brokers "$BROKERS" $SU_FLAGS
+
+# flink-processor: Read/Write public.* (writes approved/rejected events), Read/Write internal.*
 rpk acl create --allow-principal User:flink-processor \
-  --operation Read --operation Describe \
+  --operation Read --operation Write --operation Describe \
   --topic 'public.' --resource-pattern-type prefixed \
   --brokers "$BROKERS" $SU_FLAGS
 
@@ -79,6 +85,22 @@ rpk acl create --allow-principal User:schema-admin \
 rpk acl create --allow-principal User:schema-admin \
   --operation Read \
   --group 'schema-registry' --resource-pattern-type prefixed \
+  --brokers "$BROKERS" $SU_FLAGS
+
+# media-service: Read public.media.* and internal.media.*, Write public.media.*
+rpk acl create --allow-principal User:media-service \
+  --operation Read --operation Write --operation Describe \
+  --topic 'public.media.' --resource-pattern-type prefixed \
+  --brokers "$BROKERS" $SU_FLAGS
+
+rpk acl create --allow-principal User:media-service \
+  --operation Read --operation Describe \
+  --topic 'internal.media.' --resource-pattern-type prefixed \
+  --brokers "$BROKERS" $SU_FLAGS
+
+rpk acl create --allow-principal User:media-service \
+  --operation Read \
+  --group 'media-service-consumer' --resource-pattern-type literal \
   --brokers "$BROKERS" $SU_FLAGS
 
 # clickhouse-consumer: Read internal.* only
