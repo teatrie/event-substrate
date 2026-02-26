@@ -1,0 +1,38 @@
+{
+  "namespace": "public.media",
+  "type": "record",
+  "name": "FileUploadApproved",
+  "doc": "Emitted by Flink when a credit check passes and 1 credit is deducted for an upload request.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the uploading user."
+    },
+    {
+      "name": "file_name",
+      "type": "string",
+      "doc": "Original file name as provided by the client."
+    },
+    {
+      "name": "media_type",
+      "type": "string",
+      "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."
+    },
+    {
+      "name": "file_size",
+      "type": "long",
+      "doc": "Expected file size in bytes."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "request_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of the original upload intent."
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "namespace": "public.media",
+  "type": "record",
+  "name": "FileDownloadUrlSigned",
+  "doc": "Emitted by the Media Service when a presigned download URL is generated.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the downloading user."
+    },
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Object storage path of the file."
+    },
+    {
+      "name": "download_url",
+      "type": "string",
+      "doc": "Presigned GET URL for the client to download the file."
+    },
+    {
+      "name": "expires_in",
+      "type": "int",
+      "doc": "URL expiry in seconds from signed_time."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "signed_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of URL signing."
+    }
+  ]
+}

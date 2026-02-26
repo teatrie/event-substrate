@@ -1,0 +1,43 @@
+{
+  "namespace": "public.media",
+  "type": "record",
+  "name": "FileUploadUrlSigned",
+  "doc": "Emitted by the Media Service when a presigned upload URL is generated for an approved upload.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the uploading user."
+    },
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Object storage path (e.g. uploads/<user_id>/<uuid>/<file_name>)."
+    },
+    {
+      "name": "file_name",
+      "type": "string",
+      "doc": "Original file name as provided by the client."
+    },
+    {
+      "name": "upload_url",
+      "type": "string",
+      "doc": "Presigned PUT URL for the client to upload the file."
+    },
+    {
+      "name": "expires_in",
+      "type": "int",
+      "doc": "URL expiry in seconds from signed_time."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "signed_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of URL signing."
+    }
+  ]
+}
