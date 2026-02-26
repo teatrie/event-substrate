@@ -107,3 +107,88 @@ export async function deleteFile(apiGatewayUrl, token, filePath) {
   }
   return response.json()
 }
+
+export async function requestUploadIntent(apiGatewayUrl, token, fileMetadata) {
+  const base = apiGatewayUrl.replace(/\/+$/, '')
+  const response = await fetch(`${base}/api/v1/media/upload-intent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(fileMetadata),
+  })
+  if (response.status === 402) {
+    throw new InsufficientCreditsError()
+  }
+  if (response.status !== 202) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function requestDownloadIntent(apiGatewayUrl, token, filePath) {
+  const base = apiGatewayUrl.replace(/\/+$/, '')
+  const response = await fetch(`${base}/api/v1/media/download-intent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ file_path: filePath }),
+  })
+  if (response.status !== 202) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function requestDeleteIntent(apiGatewayUrl, token, filePath) {
+  const base = apiGatewayUrl.replace(/\/+$/, '')
+  const response = await fetch(`${base}/api/v1/media/delete-intent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ file_path: filePath }),
+  })
+  if (response.status !== 202) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export function createNotificationWaiter() {
+  // pending: requestId -> { resolve, reject, eventTypes: Set, timer }
+  const pending = new Map()
+
+  return {
+    waitFor(requestId, eventTypes, timeoutMs) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(requestId)
+          reject(new Error(`Notification timeout for request ${requestId}`))
+        }, timeoutMs)
+        pending.set(requestId, { resolve, reject, eventTypes: new Set(eventTypes), timer })
+      })
+    },
+
+    handleNotification(notification) {
+      const waiter = pending.get(notification.request_id)
+      if (!waiter) return
+      if (!waiter.eventTypes.has(notification.event_type)) return
+      clearTimeout(waiter.timer)
+      pending.delete(notification.request_id)
+      waiter.resolve(notification)
+    },
+
+    cleanup() {
+      for (const [, waiter] of pending) {
+        clearTimeout(waiter.timer)
+        waiter.reject(new Error('Notification waiter cleaned up'))
+      }
+      pending.clear()
+    },
+  }
+}
