@@ -42,6 +42,7 @@ TESTS=(
   test_download_delete_saga.mjs
   test_move_saga.mjs
   test_saga_timer_health.mjs
+  test_delete_retry_health.mjs
 )
 
 PASSED=0
