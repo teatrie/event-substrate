@@ -1,0 +1,28 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "DownloadIntent",
+  "doc": "Emitted by the API Gateway when a user requests a media file download.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the requesting user."
+    },
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Object storage path of the file to download."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "request_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of the download intent request."
+    }
+  ]
+}

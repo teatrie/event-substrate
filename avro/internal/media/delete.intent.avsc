@@ -1,0 +1,28 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "DeleteIntent",
+  "doc": "Emitted by the API Gateway when a user requests deletion of a media file.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the requesting user."
+    },
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Object storage path of the file to delete."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "request_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of the delete intent request."
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "namespace": "public.media",
+  "type": "record",
+  "name": "FileUploadRejected",
+  "doc": "Emitted by Flink when an upload request is rejected due to insufficient credits.",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the requesting user."
+    },
+    {
+      "name": "file_name",
+      "type": "string",
+      "doc": "Original file name as provided by the client."
+    },
+    {
+      "name": "media_type",
+      "type": "string",
+      "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."
+    },
+    {
+      "name": "file_size",
+      "type": "long",
+      "doc": "Expected file size in bytes."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "doc": "Human-readable rejection reason (e.g. 'insufficient_credits')."
+    },
+    {
+      "name": "rejected_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of the rejection."
+    }
+  ]
+}

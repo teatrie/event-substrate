@@ -1,0 +1,33 @@
+{
+  "namespace": "public.media",
+  "type": "record",
+  "name": "FileDownloadRejected",
+  "doc": "Emitted by the Media Service when a download request is rejected (file not found or not owned).",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "The unique identifier of the requesting user."
+    },
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Object storage path that was requested."
+    },
+    {
+      "name": "request_id",
+      "type": "string",
+      "doc": "Correlation ID for tracking this request through the async pipeline."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "doc": "Human-readable rejection reason (e.g. 'file_not_found', 'not_authorized')."
+    },
+    {
+      "name": "rejected_time",
+      "type": "string",
+      "doc": "ISO 8601 timestamp of the rejection."
+    }
+  ]
+}
