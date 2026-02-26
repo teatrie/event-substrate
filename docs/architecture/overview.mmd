@@ -79,8 +79,8 @@ graph TD
     API -.->|"OTLP"| OTel
     IdentityMsg -.->|"StatsD"| OTel
 
-    %% Click links to detail diagrams
-    click MediaSaga "./media-upload-saga.svg" "Upload Saga Detail"
-    click GoConsumers "./media-download-delete.svg" "Download & Delete Detail"
-    click IdentityMsg "./identity-messaging.svg" "Identity & Messaging Detail"
-    click ClickHouse "./analytics.svg" "Analytics & Data Lake Detail"
+    %% Click links to detail diagrams (source uses .mmd; SVG generation swaps to .svg)
+    click MediaSaga "./media-upload-saga.mmd" "Upload Saga Detail"
+    click GoConsumers "./media-download-delete.mmd" "Download & Delete Detail"
+    click IdentityMsg "./identity-messaging.mmd" "Identity & Messaging Detail"
+    click ClickHouse "./analytics.mmd" "Analytics & Data Lake Detail"
