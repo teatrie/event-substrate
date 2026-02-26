@@ -28,7 +28,7 @@ Do not write any implementation code yourself. Execute this in two distinct phas
 Once I approve the Phase 1 plan, you will execute the implementation for EACH domain sequentially. Do not mix contexts between domains.
 
 **Execution:**
-For the first domain, read the standard operating procedure located at `.claude/docs/tdd-protocol.md` and execute the 5-step loop. 
+For the first domain, read the standard operating procedure located at `.claude/skills/tdd-execute/tdd-protocol.md` and execute the 5-step loop. 
 
 Once the first domain is completely finished (Step 5 is complete), repeat the exact loop for the next domain, until all planned domains are implemented.
 

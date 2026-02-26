@@ -1,3 +1,7 @@
+---
+name: mermaid-to-svg
+description: Convert a Mermaid `.mmd` file to SVG.
+---
 Convert a Mermaid `.mmd` file to SVG.
 
 Usage: /mermaid-to-svg [path]

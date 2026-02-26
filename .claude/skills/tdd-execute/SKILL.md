@@ -9,6 +9,6 @@ The implementation plan is approved. Do not write the implementation code yourse
 **Task Context:** $ARGUMENTS
 
 **Execution:**
-Read the standard operating procedure located at `.claude/docs/tdd-protocol.md`. Execute the 5-step loop defined in that document for the task context provided above. 
+Read the standard operating procedure located at `.claude/skills/tdd-execute/tdd-protocol.md`. Execute the 5-step loop defined in that document for the task context provided above. 
 
 Begin step 1 now.
