@@ -5,6 +5,7 @@ import {
 import { execSync } from 'child_process'
 
 const RPK_AUTH = '--brokers localhost:9092 --user flink-processor --password flink-processor-local-pw --sasl-mechanism SCRAM-SHA-256'
+const RPK_SUPERUSER = '--brokers localhost:9092 --user superuser --password superuser-local-pw --sasl-mechanism SCRAM-SHA-256'
 
 const passed = await runTest('Delete Retry Health: topics + schemas + consumer offset advance', async () => {
   // ── Step 1: Verify topics exist ──────────────────────────────────
@@ -58,7 +59,7 @@ const passed = await runTest('Delete Retry Health: topics + schemas + consumer o
     let offsetBefore = null
     try {
       const groupInfo = execSync(
-        `docker exec redpanda rpk group describe media-service-consumer ${RPK_AUTH}`,
+        `docker exec redpanda rpk group describe media-service-consumer ${RPK_SUPERUSER}`,
         { encoding: 'utf-8', timeout: 10000 }
       )
       // Find the line for internal.media.delete.retry and extract committed offset
@@ -105,7 +106,7 @@ const passed = await runTest('Delete Retry Health: topics + schemas + consumer o
     // Check consumer group offset advanced
     console.log('  Checking consumer group offset after consume...')
     const groupInfoAfter = execSync(
-      `docker exec redpanda rpk group describe media-service-consumer ${RPK_AUTH}`,
+      `docker exec redpanda rpk group describe media-service-consumer ${RPK_SUPERUSER}`,
       { encoding: 'utf-8', timeout: 10000 }
     )
 
