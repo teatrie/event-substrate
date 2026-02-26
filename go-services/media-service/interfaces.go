@@ -34,3 +34,9 @@ type ObjectRemover interface {
 type FileDeleter interface {
 	SoftDelete(ctx context.Context, userID, filePath string) error
 }
+
+// ObjectMover copies an object to a new key and removes the original.
+// Idempotent: if source is missing but destination exists, returns nil.
+type ObjectMover interface {
+	MoveObject(ctx context.Context, bucket, srcKey, dstKey string) error
+}
