@@ -32,12 +32,16 @@ For the first domain, read the standard operating procedure located at `.claude/
 
 Once the first domain is completely finished (Step 5 is complete), repeat the exact loop for the next domain, until all planned domains are implemented.
 
-## PHASE 3: Regression Gate
+## PHASE 3: Cold-Start Regression Gate
 
-After ALL domains are implemented, run the **full existing test suite** (not just the new tests) to catch regressions in pre-existing functionality:
+After ALL domains are implemented, run the **full cold-start regression** to catch both code regressions and deployment regressions in a single pass:
 
 1. Run all unit/integration test suites across every service that was touched or that depends on changed infrastructure (Flink SQL, Kafka topics, shared schemas).
-2. If `task test:e2e` is available and the platform can be started, run it. E2E tests are the final safety net — they validate end-to-end flows that unit tests cannot cover.
+2. Run `task test:cold-start`. This purges all state, rebuilds the platform from scratch (`task clean && task purge && task init`), runs all E2E pipeline tests (`task test:e2e` with warmup gate), then runs all Playwright browser tests (`task test:browser`). This validates:
+   - `task init` still works after all changes (Dockerfiles, configmaps, K8s manifests)
+   - The Flink warmup gate passes (all pipeline checkpoints initialize correctly)
+   - All 13+ E2E tests pass against a cold platform (not just a warm dev environment)
+   - All browser UI tests pass (frontend renders correctly with the new backend changes)
 3. **If any pre-existing test fails**, treat it as a regression bug. Diagnose the root cause before declaring the epic complete. A subagent modifying shared infrastructure (e.g., Flink SQL, Kafka schemas, shared configs) must verify that ALL consumers of that infrastructure still work, not just the new feature's consumers.
 
 **Critical rule:** Subagents must NEVER weaken or remove pre-existing test assertions to make their changes pass. If an existing test contradicts the new design, the subagent must flag it to the orchestrator for review — not silently update the assertion.
