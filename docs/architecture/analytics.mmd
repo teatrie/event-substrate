@@ -1,0 +1,134 @@
+graph TD
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef olap fill:#f97316,color:#fff,stroke:#c2410c,stroke-width:2px
+    classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
+    classDef telemetry fill:#ec4899,color:#fff,stroke:#be185d,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+
+    %% ── Source nodes ──────────────────────────────────────────────────────────
+    Redpanda["Redpanda Broker"]:::broker
+    MinIO[("MinIO / S3\n(object storage)")]:::db
+    SchemaReg["Schema Registry"]:::registry
+    AuthInit["redpanda-auth-init"]:::registry
+    API["api-gateway\n(Go)"]:::gateway
+
+    %% Topic nodes
+    LoginTopic(["public.identity.login.events"]):::broker
+    SignupTopic(["public.identity.signup.events"]):::broker
+    SignoutTopic(["public.identity.signout.events"]):::broker
+    UnifiedTopic(["internal.platform.unified.events"]):::broker
+    EchoTopic(["internal.identity.login.echo"]):::broker
+    MessageTopic(["public.user.message.events"]):::broker
+    UploadTopic(["public.media.upload.events"]):::broker
+    DownloadTopic(["public.media.download.events"]):::broker
+    DeleteTopic(["public.media.delete.events"]):::broker
+
+    %% ── Bootstrap dependencies ────────────────────────────────────────────────
+    MinIO -->|"object store\n(tiered storage + Iceberg data)"| Redpanda
+    Nessie -->|"Iceberg REST Catalog\n(metadata)"| Redpanda
+    AuthInit -->|depends_on| Redpanda
+    SchemaReg -->|depends_on| AuthInit
+
+    %% Topics live on Redpanda
+    Redpanda --- LoginTopic
+    Redpanda --- SignupTopic
+    Redpanda --- SignoutTopic
+    Redpanda --- UnifiedTopic
+    Redpanda --- EchoTopic
+    Redpanda --- MessageTopic
+    Redpanda --- UploadTopic
+    Redpanda --- DownloadTopic
+    Redpanda --- DeleteTopic
+
+    %% ── Data Lake (Iceberg) ───────────────────────────────────────────────────
+    subgraph DataLake["Data Lake (Iceberg)"]
+        direction TB
+        Nessie["Nessie\n(Iceberg REST Catalog)"]:::registry
+        IcebergMinIO[("MinIO / S3\n(Parquet files)")]:::db
+        IcebergLogin["iceberg: login_events\n(Parquet)"]:::db
+        IcebergSignup["iceberg: signup_events\n(Parquet)"]:::db
+        IcebergSignout["iceberg: signout_events\n(Parquet)"]:::db
+        IcebergUnified["iceberg: unified_events\n(Parquet)"]:::db
+        IcebergEcho["iceberg: login_echo\n(Parquet)"]:::db
+        IcebergMessage["iceberg: message_events\n(Parquet)"]:::db
+        IcebergUpload["iceberg: media_upload_events\n(Parquet)"]:::db
+        IcebergDownload["iceberg: media_download_events\n(Parquet)"]:::db
+        IcebergDelete["iceberg: media_delete_events\n(Parquet)"]:::db
+
+        Nessie -->|"manages metadata"| IcebergMinIO
+    end
+
+    %% Tiered storage materializes all public + internal topics into Iceberg
+    LoginTopic -->|"Tiered Storage → Parquet"| IcebergLogin
+    SignupTopic -->|"Tiered Storage → Parquet"| IcebergSignup
+    SignoutTopic -->|"Tiered Storage → Parquet"| IcebergSignout
+    UnifiedTopic -->|"Tiered Storage → Parquet"| IcebergUnified
+    EchoTopic -->|"Tiered Storage → Parquet"| IcebergEcho
+    MessageTopic -->|"Tiered Storage → Parquet"| IcebergMessage
+    UploadTopic -->|"Tiered Storage → Parquet"| IcebergUpload
+    DownloadTopic -->|"Tiered Storage → Parquet"| IcebergDownload
+    DeleteTopic -->|"Tiered Storage → Parquet"| IcebergDelete
+
+    %% Iceberg tables write Parquet into MinIO via Nessie
+    IcebergLogin --> IcebergMinIO
+    IcebergSignup --> IcebergMinIO
+    IcebergSignout --> IcebergMinIO
+    IcebergUnified --> IcebergMinIO
+    IcebergEcho --> IcebergMinIO
+    IcebergMessage --> IcebergMinIO
+    IcebergUpload --> IcebergMinIO
+    IcebergDownload --> IcebergMinIO
+    IcebergDelete --> IcebergMinIO
+
+    %% ── Real-Time OLAP (ClickHouse) ───────────────────────────────────────────
+    subgraph ClickHouseOLAP["Real-Time OLAP (ClickHouse)"]
+        direction TB
+        CHKafka["ClickHouse\nKafka Table Engine\n(SASL: clickhouse-consumer)"]:::olap
+        CHMV["Materialized View"]:::olap
+        CHMergeTree[("unified_events\nReplacingMergeTree")]:::olap
+
+        CHKafka -->|"stream insert"| CHMV
+        CHMV -->|"deduplicated writes"| CHMergeTree
+    end
+
+    %% ClickHouse bootstrap dependency
+    Redpanda -->|depends_on| CHKafka
+
+    %% unified events feed ClickHouse
+    UnifiedTopic -->|"Kafka Table Engine\nconsumes via SASL"| CHKafka
+
+    %% ClickHouse fetches schemas from Schema Registry
+    SchemaReg -->|"fetch Avro schemas"| CHKafka
+
+    %% ── Observability Stack ───────────────────────────────────────────────────
+    subgraph ObservabilityStack["Observability Stack"]
+        direction TB
+        OTel["OTel Collector"]:::telemetry
+        Prometheus["Prometheus\n(metrics)"]:::telemetry
+        Loki["Loki\n(logs)"]:::telemetry
+        Jaeger["Jaeger\n(traces)"]:::telemetry
+        Grafana["Grafana Dashboard"]:::telemetry
+
+        OTel -->|"scrape / remote_write"| Prometheus
+        OTel -->|"log forwarding"| Loki
+        OTel -->|"trace export"| Jaeger
+        Prometheus -->|"metrics datasource"| Grafana
+        Loki -->|"log datasource"| Grafana
+        Jaeger -->|"trace datasource"| Grafana
+    end
+
+    %% Flink processors emit StatsD → OTel
+    FlinkLogin["Flink: login_processor"]:::stream
+    FlinkSignup["Flink: signup_processor"]:::stream
+    FlinkSignout["Flink: signout_processor"]:::stream
+    FlinkUnified["Flink: unified_processor"]:::stream
+
+    FlinkLogin -->|"StatsD metrics"| OTel
+    FlinkSignup -->|"StatsD metrics"| OTel
+    FlinkSignout -->|"StatsD metrics"| OTel
+    FlinkUnified -->|"StatsD metrics"| OTel
+
+    %% API Gateway emits OTLP → OTel
+    API -->|"OTLP (metrics + traces)"| OTel
