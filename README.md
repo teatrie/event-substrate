@@ -157,35 +157,70 @@ task shutdown
 
 ### All Available Tasks
 
+**Platform lifecycle**
+
 | Command | Description |
 |---|---|
-| `task init` | First-time full platform setup |
-| `task start` | Start platform (incremental Go rebuilds) |
-| `task shutdown` | Stop everything |
-| `task auth:setup` | Create Redpanda SASL users and ACLs (idempotent) |
-| `task build` | Build all Go service images (change-detected) |
+| `task init` | First-time full platform setup (installs tools, starts all services, registers schemas, deploys K8s) |
+| `task start` | Start platform after a shutdown (incremental Go rebuilds, idempotent reconciliation) |
+| `task shutdown` | Stop all services (K8s deployments, Docker Compose, Supabase) |
+| `task purge` | Nuclear teardown — destroy all state and volumes, then run `task init` to rebuild from scratch |
+
+**Build**
+
+| Command | Description |
+|---|---|
+| `task build` | Build all Go service Docker images (change-detected — only rebuilds if source changed) |
 | `task build:gateway` | Build API Gateway image only |
 | `task build:consumer` | Build Message Consumer image only |
-| `task schemas:register` | Auto-discover and register Avro schemas |
-| `task topics:create` | Create Kafka topics and enable Iceberg |
-| `task clickhouse:init` | Initialize ClickHouse tables |
-| `task k8s:operators` | Install Flink Operator and KEDA |
-| `task k8s:flink` | Deploy Flink jobs to Kubernetes |
+| `task build:media-service` | Build Media Service image only |
+| `task build:pyflink` | Build custom PyFlink image (includes psycopg2) |
+
+**Infrastructure & config**
+
+| Command | Description |
+|---|---|
+| `task auth:setup` | Create Redpanda SASL users and ACLs (idempotent) |
+| `task schemas:register` | Auto-discover and register all Avro schemas from `avro/` |
+| `task topics:create` | Create Kafka topics and enable Iceberg tiered storage |
+| `task minio:setup-webhook` | Configure MinIO bucket webhooks for media upload notifications |
+| `task clickhouse:init` | Initialize ClickHouse tables and materialized views |
+
+**Kubernetes**
+
+| Command | Description |
+|---|---|
+| `task k8s:operators` | Install Flink Operator and KEDA (one-time) |
+| `task k8s:configmaps` | Reload Flink SQL/Python ConfigMaps from source (required before redeploying Flink jobs) |
+| `task k8s:flink` | Deploy all Flink jobs to Kubernetes |
 | `task k8s:go-services` | Build and deploy Go microservices to K8s |
-| `task test:e2e` | Run all end-to-end pipeline tests |
+
+**Testing**
+
+| Command | Description |
+|---|---|
+| `task test:e2e` | Run all end-to-end pipeline tests (API → Kafka → Flink → Postgres) |
 | `task test:e2e:login` | Test login → user_notifications flow |
-| `task test:e2e:message` | Test message → user_notifications flow |
-| `task test:e2e:upload` | Test media upload → credit deduction → notification flow |
-| `task test:e2e:download-delete` | Test media download + soft-delete flow |
-| `task frontend` | Install dependencies and start Vite dev server |
-| `task status` | Show status of all services |
+| `task test:e2e:message` | Test message POST → user_notifications flow |
+| `task test:e2e:upload` | Test media upload saga → credit deduction → notification flow |
+| `task test:browser` | Run Playwright browser UI tests — **requires `task frontend` running in a separate terminal first** |
+
+**Utilities**
+
+| Command | Description |
+|---|---|
+| `task frontend` | Install dependencies and start Vite dev server (required before `task test:browser`) |
+| `task status` | Show status of all services (Supabase, Docker, K8s pods) |
 | `task logs:gateway` | Tail API Gateway logs |
 | `task logs:consumer` | Tail Message Consumer logs |
 | `task logs:flink` | Tail Flink job logs |
-| `task clean` | Clear build cache (forces full rebuild) |
+| `task clean` | Clear build checksums (forces full rebuild on next `task start`) |
 
 > [!TIP]
 > **Incremental Builds:** Task tracks file checksums in `.task/`. When you modify a Go source file, only the affected service image is rebuilt on the next `task start`. To force a full rebuild, run `task clean` first.
+
+> [!NOTE]
+> **Browser Tests:** `task test:browser` runs Playwright against the live Vite dev server. You must have `task frontend` running in a separate terminal before starting the tests. The test suite exercises the full UI flow — login, media upload, credit display, notifications — against the real backend.
 
 ## Telemetry & Observability (Grafana + OpenTelemetry)
 
