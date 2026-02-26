@@ -103,6 +103,8 @@ def completed_event():
         "file_size": 204800,
         "media_type": "image/jpeg",
         "upload_time": "2026-02-25T10:05:00+00:00",
+        "permanent_path": "files/user-abc/uuid-1/photo.jpg",
+        "retry_count": 0,
     }
 
 
@@ -201,7 +203,7 @@ class TestProcessElement1:
 
 
 class TestProcessElement2:
-    """D8: process_element2 — handles upload.events (completion signal)."""
+    """D8: process_element2 — handles upload.received (completion signal)."""
 
     def test_sets_upload_completed_to_true(self, ttl_fn, completed_event):
         ctx = MockContext()

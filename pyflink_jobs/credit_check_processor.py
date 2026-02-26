@@ -50,6 +50,10 @@ def get_db_connection():
         dbname=SUPABASE_DB_NAME,
         user=SUPABASE_DB_USER,
         password=SUPABASE_DB_PASSWORD,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
     )
 
 
@@ -172,12 +176,15 @@ def run_credit_check_job():
 
             except Exception as e:
                 print(f"Credit check error for user {user_id}: {e}")
-                self.conn.rollback()
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 # Reconnect on error
                 try:
                     self.conn = get_db_connection()
-                except Exception:
-                    pass
+                except Exception as reconnect_err:
+                    print(f"Reconnect failed: {reconnect_err}")
                 rejected_time = datetime.now(timezone.utc).isoformat()
                 yield Row("rejected", user_id, file_name, media_type, file_size, request_id, "", "internal_error", rejected_time)
 
