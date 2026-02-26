@@ -58,8 +58,8 @@ Every credential below is currently stored in plaintext and checked into version
 | SASL flink-processor password | `flink-processor-local-pw` | `kubernetes/flink-deployment.yaml`, `kubernetes/pyflink-deployment.yaml` | — |
 | SASL schema-admin password | `schema-admin-local-pw` | `docker-compose.yml` (Schema Registry JAAS) | — |
 | SASL clickhouse-consumer password | `clickhouse-local-pw` | `clickhouse/kafka-sasl.xml` | — |
-| MinIO access key (upload handler) | `admin` | `go-services/api-gateway` env vars | — |
-| MinIO secret key (upload handler) | `password` | `go-services/api-gateway` env vars | — |
+| MinIO access key (media-service) | `admin` | `kubernetes/go-services/media-service.yaml` | — |
+| MinIO secret key (media-service) | `password` | `kubernetes/go-services/media-service.yaml` | — |
 | MinIO webhook auth token | (if configured) | `scripts/setup-minio-webhook.sh` | — |
 
 ### Migration Path
@@ -434,19 +434,19 @@ The `upload_handler.go` uses `CreditChecker` and `URLSigner` interfaces. In prod
 - **AWS:** Replace with [S3 Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html). Use IRSA for credentials.
 
 ### Storage Event Bridge (MinIO Webhook → Cloud Pub/Sub)
-MinIO fires S3 event notifications via webhook to `POST /webhooks/media-upload`. In production:
-- **GCP:** Replace with [GCS Pub/Sub notifications](https://cloud.google.com/storage/docs/pubsub-notifications). A Cloud Function or small adapter service subscribes to the Pub/Sub topic and produces to Kafka (or the `media_webhook_handler.go` listens on a Pub/Sub subscription instead of an HTTP webhook).
-- **AWS:** Replace with [S3 Event Notifications → SNS/SQS](https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html). Route to a Lambda or the webhook handler via SQS.
+MinIO fires S3 event notifications via webhook to the media-service (`POST /webhooks/media-upload` for `uploads/` prefix, `POST /webhooks/file-ready` for `files/` prefix). In production:
+- **GCP:** Replace with [GCS Pub/Sub notifications](https://cloud.google.com/storage/docs/pubsub-notifications). A Cloud Function or small adapter service subscribes to the Pub/Sub topic and produces to Kafka (or the media-service webhook handlers listen on a Pub/Sub subscription instead of HTTP webhooks).
+- **AWS:** Replace with [S3 Event Notifications → SNS/SQS](https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html). Route to a Lambda or the media-service webhook handlers via SQS.
 
 ### New Environment Variables
 
 | Env Var | Service | Purpose |
 |---|---|---|
-| `MINIO_ENDPOINT` | api-gateway | MinIO/S3/GCS endpoint for presigned URL generation |
-| `MINIO_ACCESS_KEY` | api-gateway | Storage access key (use Workload Identity/IRSA in prod) |
-| `MINIO_SECRET_KEY` | api-gateway | Storage secret key (use Workload Identity/IRSA in prod) |
-| `MINIO_BUCKET` | api-gateway | Bucket name for media uploads (`media-uploads`) |
-| `SUPABASE_DB_URL` | api-gateway | Postgres connection string for credit balance queries |
+| `MINIO_ENDPOINT` | media-service | MinIO/S3/GCS endpoint for presigned URL generation and object operations |
+| `MINIO_ACCESS_KEY` | media-service | Storage access key (use Workload Identity/IRSA in prod) |
+| `MINIO_SECRET_KEY` | media-service | Storage secret key (use Workload Identity/IRSA in prod) |
+| `MINIO_BUCKET` | media-service | Bucket name for media uploads (`media-uploads`) |
+| `SUPABASE_DB_URL` | media-service | Postgres connection string for file metadata and ownership queries |
 | `SUPABASE_JWT_SECRET` | api-gateway | Symmetric HS256 JWT signing secret (Supabase project JWT secret) |
 | `SUPABASE_JWKS_URL` | api-gateway | JWKS endpoint for ES256 public key fetch (e.g., `https://<project>.supabase.co/auth/v1/.well-known/jwks.json`) |
 

@@ -48,7 +48,7 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 6. **Websockets:** Supabase catches the `user_notifications` insertion on its logical replication hook and fires a payload over `supabase_realtime` websockets. RLS policies scope delivery: broadcast messages reach all authenticated clients, while direct messages are only visible to the sender and the designated recipient. The frontend parses the `event_type` and `payload` fields to render the notification.
 
 ### Feature Flow (Upload Saga — Fully Async Media Upload + Credit Economy)
-The media upload pipeline is a **fully async event-driven saga** spanning 4 services and 12 Kafka topics. Every state transition is a first-class event — no silent DB writes.
+The media upload pipeline is a **fully async event-driven saga** spanning 5 services and 15 Kafka topics. Every state transition is a first-class event — no silent DB writes.
 
 1. **Intent Submission:** The Frontend calls `POST /api/v1/media/upload-intent` with the Supabase JWT and file metadata (`file_name`, `media_type`, `file_size`). The API Gateway returns `202 Accepted` with a `request_id` and produces an `UploadIntent` event to `internal.media.upload.intent`.
 2. **Credit Check (PyFlink):** The `credit_check_processor.py` (PyFlink DataStream) consumes the intent, atomically checks and deducts 1 credit via a conditional SQL query (`WHERE balance >= 1`), and routes to either `public.media.upload.approved` or `public.media.upload.rejected`.
@@ -56,8 +56,11 @@ The media upload pipeline is a **fully async event-driven saga** spanning 4 serv
 4. **Notification (Flink SQL):** The `media_notification_processor.sql` consumes `upload.signed` and inserts a `media.upload_ready` notification (with `upload_url`, `file_path`, `request_id`) into `user_notifications`. On rejection, it inserts `media.upload_rejected` with the reason.
 5. **Realtime Delivery:** Supabase Realtime pushes the notification to the Frontend via the existing WebSocket subscription.
 6. **Browser-Direct Upload (Claim Check Pattern):** The Frontend uploads the file directly to MinIO using the presigned URL. The raw file never touches the API Gateway or Kafka.
-7. **Upload Completion:** MinIO fires an S3 webhook to `POST /webhooks/media-upload`. The API Gateway transforms it into a `NewFileUploaded` event on `public.media.upload.events`. Flink persists file metadata in `media_files` and emits `media.upload_completed`.
-8. **TTL Expiry Saga (PyFlink):** The `ttl_expiry_processor.py` (`KeyedCoProcessFunction`) consumes both `upload.signed` and `upload.events`, keyed by `file_path`. It arms a 15-minute processing-time timer. If the upload completes before the timer fires, the state is cleared. If not, it emits `FileUploadExpired` to `public.media.expired.events`, triggering a credit refund (+1 via `credit_balance_processor.sql`) and best-effort MinIO object removal (via `media-service`). MinIO's 24h lifecycle policy acts as a backstop.
+7. **Upload Webhook + Move-to-Permanent:** MinIO fires an S3 PUT webhook to `POST /webhooks/media-upload` on the media-service (port 8090). The handler produces `UploadReceived` to `internal.media.upload.received` and triggers an async `MoveObject` from `uploads/` to `files/` prefix.
+8. **File-Ready Webhook:** When the object arrives in `files/`, MinIO fires a second webhook to `POST /webhooks/file-ready`. The handler produces `FileReady` to `internal.media.file.ready`.
+9. **Move Saga Processor (PyFlink):** The `move_saga_processor.py` (`KeyedCoProcessFunction`) joins `upload.received` + `file.ready` by permanent file path with a timeout. Both present → emits `UploadConfirmed` to `public.media.upload.confirmed` (triggers `media_files` INSERT, credit ledger entry, and notification). Timeout + retry < 3 → emits to `internal.media.upload.retry`. Timeout + retry >= 3 → emits to `internal.media.upload.dead-letter` (DLQ notification to user).
+10. **Retry Loop:** The media-service retry handler consumes `upload.retry`, performs a synchronous `MoveObject`, and re-produces `UploadReceived` with `retry_count + 1` — re-entering the saga at step 9.
+11. **TTL Expiry Saga (PyFlink):** The `ttl_expiry_processor.py` (`KeyedCoProcessFunction`) consumes both `upload.signed` and `upload.received`, keyed by `file_path`. It arms a 15-minute processing-time timer. If the upload arrives before the timer fires, the state is cleared. If not, it emits `FileUploadExpired` to `public.media.expired.events`, triggering a credit refund (+1 via `credit_balance_processor.sql`) and best-effort MinIO object removal (via `media-service`). MinIO's 24h lifecycle policy acts as a backstop.
 
 > [!NOTE]
 > **Credit Deduction Timing:** Credits are deducted **at intent time** (atomic SQL in PyFlink), not at upload completion. If the upload fails or is abandoned, the TTL saga automatically refunds the credit after 15 minutes. This ensures users are never permanently charged for incomplete uploads.
@@ -78,9 +81,9 @@ The media upload pipeline is a **fully async event-driven saga** spanning 4 serv
 > **Delete Ordering:** MinIO object removal happens *before* the DB soft-delete. If MinIO fails, the file still exists and the user can retry. If the DB fails after MinIO succeeds, the object is gone but the soft-delete can be retried (idempotent).
 
 ### Additional Processing & Storage
-*   **Media File Storage (MinIO / GCS):** Uploaded media files are stored in the `media-uploads` MinIO bucket (GCS in production) with a 24h lifecycle policy for orphaned uploads. Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
+*   **Media File Storage (MinIO / GCS):** Uploaded media files land in the `uploads/` prefix of the `media-uploads` MinIO bucket (24h lifecycle policy). The move-to-permanent saga reliably promotes them to the `files/` prefix (no lifecycle). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
 *   **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
-*   **PyFlink Microservices:** Two Python Flink applications run natively in K8s: `credit_check_processor.py` (atomic credit check + deduction for upload intents) and `ttl_expiry_processor.py` (dual-stream `KeyedCoProcessFunction` for upload timeout saga). Plus `echo_processor.py` for identity event echo.
+*   **PyFlink Microservices:** Four Python Flink applications run natively in K8s: `credit_check_processor.py` (atomic credit check + deduction for upload intents), `ttl_expiry_processor.py` (dual-stream `KeyedCoProcessFunction` for upload timeout saga), `move_saga_processor.py` (move-to-permanent saga supervisor with retry + DLQ), and `echo_processor.py` for identity event echo.
 
 ---
 
@@ -106,7 +109,7 @@ When extending or maintaining this platform, **strict adherence to framework and
 - `docs/data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
 - `docs/data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
 - `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
-- `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`).
+- `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`, `move_saga_processor.py`).
 - `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).
 - `kubernetes/`: Kubernetes deployment manifests for Flink, Go services, and Flink Operator.
 - `supabase/`: Database migrations and webhook configurations.
@@ -183,9 +186,6 @@ task shutdown
 
 > [!TIP]
 > **Incremental Builds:** Task tracks file checksums in `.task/`. When you modify a Go source file, only the affected service image is rebuilt on the next `task start`. To force a full rebuild, run `task clean` first.
-
-> [!NOTE]
-> **Legacy Scripts:** The original `init.sh`, `start.sh`, and `shutdown.sh` bash scripts are retained for reference but `Taskfile.yml` is the primary build system.
 
 ## Telemetry & Observability (Grafana + OpenTelemetry)
 

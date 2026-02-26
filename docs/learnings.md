@@ -105,8 +105,8 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 📁 Media Upload & Credit Economy
 
 ### 1. MinIO Webhook Event Format Requires Transformation
-**Observation:** MinIO S3 event notifications use a nested JSON structure (`Records[].s3.bucket.name`, `Records[].s3.object.key`, etc.) that doesn't directly map to our Avro `NewFileUploaded` schema. The event also includes URL-encoded keys and metadata in custom headers (`x-amz-meta-*`).
-**Decision:** Built a dedicated `media_webhook_handler.go` that extracts and transforms the MinIO event format into our flat Avro-compatible structure before producing to Kafka. This keeps the Flink SQL processor simple — it reads clean, pre-normalized events.
+**Observation:** MinIO S3 event notifications use a nested JSON structure (`Records[].s3.bucket.name`, `Records[].s3.object.key`, etc.) that doesn't directly map to our Avro schemas. The event also includes URL-encoded keys and metadata in custom headers (`x-amz-meta-*`).
+**Decision:** Built dedicated webhook handlers in the media-service (`upload_webhook_handler.go`, `file_ready_webhook_handler.go`) that extract and transform the MinIO event format into flat Avro-compatible structures before producing to Kafka. This keeps downstream processors simple — they read clean, pre-normalized events.
 
 ### 2. Append-Only Credit Ledger Over Mutable Balance Column
 **Observation:** A mutable `balance` column on a `user_credits` table would require UPDATE operations, which conflict with Flink JDBC sinks (append-only, no PRIMARY KEY for pure INSERT). It also loses the audit trail of individual credit transactions.
@@ -117,8 +117,8 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Decision:** Deduct at intent, refund on expiry. The `credit_check_processor.py` atomically checks and deducts in a single SQL query (no race window). If the upload doesn't complete within 15 minutes, the `ttl_expiry_processor.py` emits `FileUploadExpired`, and `credit_balance_processor.sql` refunds +1 credit. This ensures users are never permanently charged for failed uploads while eliminating the multi-URL race condition.
 
 ### 3b. TTL Processor Keys by file_path, Not request_id
-**Observation:** The `upload.signed` event has `request_id` but `upload.events` (MinIO webhook) does not — there's no way to correlate them by request. Both events share `file_path`.
-**Decision:** The TTL processor keys its dual-stream `KeyedCoProcessFunction` by `file_path`. This correctly correlates signed URLs with their upload completions. Trade-off: if the same file_path is re-signed (e.g., on retry), the second signed event overwrites state and resets the timer.
+**Observation:** The `upload.signed` event has `request_id` but `upload.received` (MinIO webhook) does not — there's no way to correlate them by request. Both events share `file_path`.
+**Decision:** The TTL processor keys its dual-stream `KeyedCoProcessFunction` by `file_path`. This correctly correlates signed URLs with their upload receipts. Trade-off: if the same file_path is re-signed (e.g., on retry), the second signed event overwrites state and resets the timer.
 
 ### 3c. FileUploadExpired Schema Gap: file_size and media_type
 **Observation:** The `FileUploadExpired` Avro schema requires `file_size` and `media_type`, but `upload.signed` (the TTL processor's primary input) doesn't carry them — they live on `upload.approved`.
@@ -150,10 +150,10 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 2. `json.NewDecoder().UseNumber()` into `map[string]any` → numbers become `json.Number` (string type) → Avro rejects with "json.Number is unsupported for Avro long"
 3. Both are needed: `UseNumber()` preserves the exact representation, then a custom `convertJSONNumbers()` walker converts `json.Number` → `int64` (via `.Int64()`) or `float64` (via `.Float64()`) for native Go types that hamba/avro accepts.
 
-**Decision:** In `processAndProduceEvent` (the shared entry point for ALL event production), use `json.NewDecoder().UseNumber()` for deserialization, then call `convertJSONNumbers(event)` to recursively convert `json.Number` values to native `int64`/`float64` before Avro encoding. This fix benefits all topics with numeric Avro fields, not just media uploads. The `json.Number` usage in `mediaWebhookHandler` is still correct — it preserves integers through the JSON marshal step — but wouldn't be sufficient alone without the decoder-side fix.
+**Decision:** In `processAndProduceEvent` (the shared entry point for ALL event production), use `json.NewDecoder().UseNumber()` for deserialization, then call `convertJSONNumbers(event)` to recursively convert `json.Number` values to native `int64`/`float64` before Avro encoding. This fix benefits all topics with numeric Avro fields, not just media uploads.
 
 ### 9. MinIO Webhook Auth Requires Version-Specific Configuration
-**Observation:** MinIO's `mc admin config set notify_webhook:gateway auth_token=...` parameter exists in documentation but is not supported in all MinIO versions. The config silently ignores the `auth_token` field, causing webhooks to arrive without any authentication header, resulting in 401 errors from the gateway.
+**Observation:** MinIO's `mc admin config set notify_webhook:<name> auth_token=...` parameter exists in documentation but is not supported in all MinIO versions. The config silently ignores the `auth_token` field, causing webhooks to arrive without any authentication header.
 **Decision:** Do not rely on `auth_token` for MinIO webhook authentication in local dev. Instead, authenticate MinIO's webhook endpoint by network isolation (the endpoint is only reachable from within the Docker/K8s network). Add a `TODO(prod)` for IP allowlisting or mutual TLS in production. Always check `mc admin config get` output to verify which fields are actually persisted.
 
 ### 10. MinIO Webhook Setup Is Infrastructure State, Not Build State
@@ -161,8 +161,8 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Decision:** The `scripts/setup-minio-webhook.sh` script must be included in the `task start` startup sequence, similar to `schemas:register` and `topics:create`. It is idempotent (re-applies are safe) and should always run to reconcile state. The `AGENT.md` deployment checklist calls this out explicitly.
 
 ### 11. MinIO Event Queue Persists Failed Deliveries Across Restarts
-**Observation:** When a MinIO webhook returns a non-2xx status, MinIO enqueues the event for retry (every ~3 seconds). This queue persists across container restarts and even survives deletion of the original object. A single failed webhook can generate thousands of retry attempts, dominating gateway logs and potentially blocking new event deliveries via queue saturation.
-**Decision:** When debugging MinIO webhook issues: (1) always check gateway logs for the actual user ID — if you see the SAME user retrying, it's a stale event, not a new upload; (2) restart MinIO AND re-run `setup-minio-webhook.sh` to clear the retry queue; (3) clear stale objects with `mc rm --recursive --force` before re-testing. The `httptest.ResponseRecorder` pattern in `mediaWebhookHandler` now returns proper HTTP status codes to MinIO, so successful events get acknowledged immediately (200) while failures get retried (400+).
+**Observation:** When a MinIO webhook returns a non-2xx status, MinIO enqueues the event for retry (every ~3 seconds). This queue persists across container restarts and even survives deletion of the original object. A single failed webhook can generate thousands of retry attempts, dominating service logs and potentially blocking new event deliveries via queue saturation.
+**Decision:** When debugging MinIO webhook issues: (1) always check media-service logs for the actual user ID — if you see the SAME user retrying, it's a stale event, not a new upload; (2) restart MinIO AND re-run `setup-minio-webhook.sh` to clear the retry queue; (3) clear stale objects with `mc rm --recursive --force` before re-testing. The webhook handlers in media-service return proper HTTP status codes to MinIO, so successful events get acknowledged immediately (200) while failures get retried (400+).
 
 ### 12. Flink `NoRestartBackoffTimeStrategy` Turns Transient Failures Into Silent Permanent Death
 
