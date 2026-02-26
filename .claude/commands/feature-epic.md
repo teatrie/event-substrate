@@ -12,7 +12,17 @@ Do not write any implementation code yourself. Execute this in two distinct phas
 ## PHASE 1: Domain Decomposition & Planning
 1. Break the requested feature down into strictly isolated architectural domains based on the logical boundaries of the system (e.g., Flink job, Kafka consumer, database schema).
 2. For each domain, write a brief implementation plan and explicitly define the data contracts/interfaces between them.
-3. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
+3. **Mandatory test domains** — the following must always be included as explicit domains in the plan (not afterthoughts):
+   - **E2E pipeline tests** (`tests/e2e/`): Backend end-to-end tests validating the full event flow (API → Kafka → Flink → DB). These use Node.js scripts against a running platform.
+   - **Browser integration tests** (Playwright): If the feature has any user-facing UI changes, include a domain for Playwright tests that exercise the actual browser UX — DOM states, loading/waiting indicators, notification rendering, error handling, and the complete user journey. Unit tests with mocked fetch are not a substitute for browser-level validation.
+4. **Mandatory deployment domain** — if ANY domain introduces a new service, Docker image, or deployable artifact, the plan MUST include a deployment domain covering:
+   - **Dockerfile**: Exists and builds cleanly
+   - **Docker build task**: Entry in `Taskfile.yml` (e.g., `build:my-service`) following existing patterns, wired into the `build` aggregate task
+   - **K8s manifest**: Deployment (+ Service if needed) YAML in `kubernetes/`, with all env vars from config. Must use `imagePullPolicy: Never` for local dev (OrbStack shares Docker daemon — `Never` uses local images directly, `Always` fails on registry pull, `IfNotPresent` caches stale images)
+   - **Taskfile wiring**: Build task runs before deployment (`k8s:*` depends on `build:*`), and both are reachable from `task init`/`task start`
+   - **Image rebuild for modified Dockerfiles**: If an existing Dockerfile is changed (e.g., adding a pip dependency), the image MUST be rebuilt — local `go build` or `pytest` passing does NOT validate the container
+   - Code is not complete until it can be deployed with `task init` and runs as a pod. Local build/test alone is insufficient.
+5. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
 
 ## PHASE 2: Sequential TDD Execution
 Once I approve the Phase 1 plan, you will execute the implementation for EACH domain sequentially. Do not mix contexts between domains.
@@ -21,3 +31,13 @@ Once I approve the Phase 1 plan, you will execute the implementation for EACH do
 For the first domain, read the standard operating procedure located at `.claude/docs/tdd-protocol.md` and execute the 5-step loop. 
 
 Once the first domain is completely finished (Step 5 is complete), repeat the exact loop for the next domain, until all planned domains are implemented.
+
+## PHASE 3: Regression Gate
+
+After ALL domains are implemented, run the **full existing test suite** (not just the new tests) to catch regressions in pre-existing functionality:
+
+1. Run all unit/integration test suites across every service that was touched or that depends on changed infrastructure (Flink SQL, Kafka topics, shared schemas).
+2. If `task test:e2e` is available and the platform can be started, run it. E2E tests are the final safety net — they validate end-to-end flows that unit tests cannot cover.
+3. **If any pre-existing test fails**, treat it as a regression bug. Diagnose the root cause before declaring the epic complete. A subagent modifying shared infrastructure (e.g., Flink SQL, Kafka schemas, shared configs) must verify that ALL consumers of that infrastructure still work, not just the new feature's consumers.
+
+**Critical rule:** Subagents must NEVER weaken or remove pre-existing test assertions to make their changes pass. If an existing test contradicts the new design, the subagent must flag it to the orchestrator for review — not silently update the assertion.

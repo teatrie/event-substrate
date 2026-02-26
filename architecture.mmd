@@ -9,6 +9,7 @@ graph TD
     classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
     classDef telemetry fill:#ec4899,color:#fff,stroke:#be185d,stroke-width:2px
     classDef auth fill:#dc2626,color:#fff,stroke:#991b1b,stroke-width:3px
+    classDef mediaservice fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px
 
     subgraph "User Layer"
         WebUI["Vite Frontend"]:::frontend
@@ -32,6 +33,7 @@ graph TD
         API["Go API Gateway\n(api-gateway)"]:::gateway
         ConfigMap["ConfigMap\n(routes.yaml)"]:::registry
         GoMessageConsumer["Go Consumer:\nmessage-consumer"]:::stream
+        MediaService["Go Consumer:\nmedia-service\n(🔑 media-service)"]:::mediaservice
         KEDA["KEDA Autoscaler\n(ScaledObject)"]:::telemetry
     end
     API <-->|"Fetch Avro Schemas"| SchemaReg
@@ -42,7 +44,7 @@ graph TD
     subgraph "Data Lake & Object Storage"
         Nessie["Project Nessie\n(REST Catalog)"]:::registry
         MinIO[("MinIO\n(S3 Object Storage)")]:::db
-        MediaBucket[("MinIO: media-uploads\n(Claim Check Store)")]:::db
+        MediaBucket[("MinIO: media-uploads\n(Claim Check Store)\n24h lifecycle policy")]:::db
     end
 
     subgraph "Message Broker (Redpanda · SASL/SCRAM-SHA-256)"
@@ -57,17 +59,27 @@ graph TD
             TopicMediaUpload("public.media.upload.events"):::broker
             TopicMediaDownload("public.media.download.events"):::broker
             TopicMediaDelete("public.media.delete.events"):::broker
+            TopicUploadApproved("public.media.upload.approved"):::broker
+            TopicUploadRejected("public.media.upload.rejected"):::broker
+            TopicUploadSigned("public.media.upload.signed"):::broker
+            TopicExpired("public.media.expired.events"):::broker
+            TopicDownloadSigned("public.media.download.signed"):::broker
+            TopicDownloadRejected("public.media.download.rejected"):::broker
+            TopicDeleteRejected("public.media.delete.rejected"):::broker
         end
         subgraph "Internal Topics (internal.*)"
             TopicUnified("internal.platform.unified.events"):::broker
             TopicPy("internal.identity.login.echo"):::broker
+            TopicUploadIntent("internal.media.upload.intent"):::broker
+            TopicDownloadIntent("internal.media.download.intent"):::broker
+            TopicDeleteIntent("internal.media.delete.intent"):::broker
         end
     end
 
     %% Auth bootstrap chain
     AuthInit -.->|"Admin API :9644\nCreate SCRAM Users + ACLs"| SchemaReg
 
-    %% Data entering the broker (SASL: api-gateway — Write public.*)
+    %% Data entering the broker (SASL: api-gateway — Write public.*, Write internal.media.*)
     API -->|"🔑 api-gateway\nProduce Avro"| TopicLogin
     API -->|"🔑 api-gateway\nProduce Avro"| TopicSignup
     API -->|"🔑 api-gateway\nProduce Avro"| TopicSignout
@@ -80,7 +92,10 @@ graph TD
             FlinkSignout["Flink SQL:\nsignout_events_processor"]:::stream
             FlinkUnion["Flink SQL:\nunified_events_processor"]:::stream
             FlinkCredits["Flink SQL:\ncredit_balance_processor"]:::stream
+            FlinkMediaNotifs["Flink SQL:\nmedia_notification_processor"]:::stream
             PyFlinkEcho["PyFlink:\necho_processor"]:::stream
+            PyFlinkCreditCheck["PyFlink:\ncredit_check_processor\n(Atomic SQL)"]:::stream
+            PyFlinkTTL["PyFlink:\nttl_expiry_processor\n(KeyedCoProcessFunction)"]:::stream
         end
     end
 
@@ -111,6 +126,7 @@ graph TD
     TopicMediaUpload -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicMediaDownload -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
     TopicMediaDelete -.->|"Tiered Storage\nMaterialize Parquet"| Nessie
+
     Nessie -->|"Manage Metadata & Data"| MinIO
 
     %% Processors write to unified notifications only
@@ -119,33 +135,80 @@ graph TD
     FlinkSignout -->|"INSERT JDBC\n(identity.signout)"| UserNotifs
     GoMessageConsumer -->|"lib/pq INSERT\n(user.message)"| UserNotifs
 
-    %% Credit balance processor (consumes signup + media upload events)
+    %% Credit balance processor (consumes signup + expired events)
     TopicSignup -->|"Consume Avro"| FlinkCredits
     TopicMediaUpload -->|"Consume Avro"| FlinkCredits
-    FlinkCredits -->|"INSERT JDBC\n(+2 signup / -1 upload)"| CreditLedger
+    TopicExpired -->|"Consume Avro"| FlinkCredits
+    FlinkCredits -->|"INSERT JDBC\n(+2 signup / -1 upload\n+1 expired refund)"| CreditLedger
     FlinkCredits -->|"INSERT JDBC\n(file metadata)"| MediaFiles
     FlinkCredits -->|"INSERT JDBC\n(credit.balance_changed)"| UserNotifs
     CreditLedger -.->|"SUM(amount)"| CreditView
 
-    %% Media upload flow (Claim Check Pattern)
-    WebUI -->|"4. POST /api/v1/media/upload-url\n(JWT + credit check)"| API
-    API -->|"Query balance"| CreditView
-    API -->|"Return presigned PUT URL"| WebUI
-    WebUI -->|"5. PUT file (browser-direct)\n(presigned URL + CORS)"| MediaBucket
-    MediaBucket -->|"6. Webhook notification\nPOST /webhooks/media-upload"| API
-    API -->|"🔑 api-gateway\nProduce Avro\n(S3→Avro transform)"| TopicMediaUpload
+    %% ═══════════════════════════════════════════════════════════
+    %% Upload Saga (fully async event-driven media pipeline)
+    %% ═══════════════════════════════════════════════════════════
 
-    %% Media download flow
-    WebUI -->|"POST /api/v1/media/download-url\n(JWT + ownership check)"| API
-    API -->|"Query file metadata"| MediaFiles
-    API -->|"Return presigned GET URL"| WebUI
-    API -->|"🔑 api-gateway\nProduce Avro\n(FileDownloaded)"| TopicMediaDownload
+    %% Step 1: Frontend submits intent → API Gateway produces to internal topic
+    WebUI -->|"4. POST /api/v1/media/upload-intent\n(JWT) → 202 {request_id}"| API
+    API -->|"🔑 api-gateway\nProduce Avro\n(UploadIntent)"| TopicUploadIntent
+
+    %% Step 2: PyFlink credit check (atomic SQL: check + deduct in one query)
+    TopicUploadIntent -->|"Consume Avro"| PyFlinkCreditCheck
+    PyFlinkCreditCheck -->|"Approved\n(balance >= 1)"| TopicUploadApproved
+    PyFlinkCreditCheck -->|"Rejected\n(insufficient credits)"| TopicUploadRejected
+
+    %% Step 3: Media Service generates presigned URL
+    TopicUploadApproved -->|"🔑 media-service\nConsume Avro"| MediaService
+    MediaService -->|"Presigned PUT URL\nProduce Avro"| TopicUploadSigned
+
+    %% Step 4: Flink notification processor routes all media events to user_notifications
+    TopicUploadSigned -->|"Consume Avro"| FlinkMediaNotifs
+    TopicUploadRejected -->|"Consume Avro"| FlinkMediaNotifs
+    TopicMediaUpload -->|"Consume Avro"| FlinkMediaNotifs
+    TopicExpired -->|"Consume Avro"| FlinkMediaNotifs
+    TopicDownloadSigned -->|"Consume Avro"| FlinkMediaNotifs
+    TopicDownloadRejected -->|"Consume Avro"| FlinkMediaNotifs
+    TopicMediaDelete -->|"Consume Avro"| FlinkMediaNotifs
+    TopicDeleteRejected -->|"Consume Avro"| FlinkMediaNotifs
+    FlinkMediaNotifs -->|"INSERT JDBC\n(media.* notifications)"| UserNotifs
+
+    %% Step 5: Frontend receives presigned URL via Realtime → uploads directly
+    WebUI -->|"5. PUT file (browser-direct)\n(presigned URL + CORS)"| MediaBucket
+
+    %% Step 6: MinIO webhook → upload completion event
+    MediaBucket -->|"6. Webhook notification\nPOST /webhooks/media-upload"| API
+    API -->|"🔑 api-gateway\nProduce Avro\n(NewFileUploaded)"| TopicMediaUpload
+
+    %% Step 7: TTL expiry processor (dual-stream, processing-time timer)
+    TopicUploadSigned -->|"Consume Avro\n(arm timer)"| PyFlinkTTL
+    TopicMediaUpload -->|"Consume Avro\n(mark completed)"| PyFlinkTTL
+    PyFlinkTTL -->|"Timer fired\nno upload"| TopicExpired
+
+    %% Step 8: Expired cleanup (best-effort MinIO removal)
+    TopicExpired -->|"🔑 media-service\nConsume Avro"| MediaService
+    MediaService -->|"RemoveObject\n(best-effort)"| MediaBucket
+
+    %% ═══════════════════════════════════════════════════════════
+    %% Download Saga (async intent → presigned GET URL)
+    %% ═══════════════════════════════════════════════════════════
+    WebUI -->|"POST /api/v1/media/download-intent\n(JWT) → 202 {request_id}"| API
+    API -->|"🔑 api-gateway\nProduce Avro\n(DownloadIntent)"| TopicDownloadIntent
+    TopicDownloadIntent -->|"🔑 media-service\nConsume Avro"| MediaService
+    MediaService -->|"Ownership check\n+ Presigned GET URL"| TopicDownloadSigned
+    MediaService -->|"Not found"| TopicDownloadRejected
+    MediaService -->|"Query file metadata"| MediaFiles
     WebUI -.->|"GET file (browser-direct)\n(presigned URL)"| MediaBucket
 
-    %% Media delete flow
-    WebUI -->|"POST /api/v1/media/delete\n(JWT + ownership check)"| API
-    API -->|"UPDATE status='deleted'"| MediaFiles
-    API -->|"🔑 api-gateway\nProduce Avro\n(FileDeleted)"| TopicMediaDelete
+    %% ═══════════════════════════════════════════════════════════
+    %% Delete Saga (async intent → soft-delete + MinIO removal)
+    %% ═══════════════════════════════════════════════════════════
+    WebUI -->|"POST /api/v1/media/delete-intent\n(JWT) → 202 {request_id}"| API
+    API -->|"🔑 api-gateway\nProduce Avro\n(DeleteIntent)"| TopicDeleteIntent
+    TopicDeleteIntent -->|"🔑 media-service\nConsume Avro"| MediaService
+    MediaService -->|"Ownership + RemoveObject\n+ SoftDelete"| TopicMediaDelete
+    MediaService -->|"Not found / error"| TopicDeleteRejected
+    MediaService -->|"UPDATE status='deleted'"| MediaFiles
+    MediaService -->|"RemoveObject"| MediaBucket
 
     subgraph "Real-Time OLAP (🔑 clickhouse-consumer)"
         CHKafka["Kafka Table Engine"]:::olap

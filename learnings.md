@@ -112,9 +112,21 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** A mutable `balance` column on a `user_credits` table would require UPDATE operations, which conflict with Flink JDBC sinks (append-only, no PRIMARY KEY for pure INSERT). It also loses the audit trail of individual credit transactions.
 **Decision:** Used an append-only `credit_ledger` table where each row is a signed delta (`+2` for signup, `-1` for upload). A `user_credit_balances` view aggregates `SUM(amount)` grouped by `user_id`. This fits Flink's INSERT-only model, provides a full audit trail, and enables future credit analytics.
 
-### 3. Credit Deduction on Upload Completion, Not URL Request
-**Observation:** Deducting credits when the presigned URL is generated (at request time) would charge users for uploads that fail, get abandoned, or timeout. Refund logic would add significant complexity.
-**Decision:** Credits are checked (but not deducted) at presigned URL request time — the balance check prevents unauthorized uploads. Actual deduction happens asynchronously when MinIO fires the upload completion webhook. The tradeoff is a brief race window where a user could request multiple URLs with only 1 credit remaining, but this is acceptable given the low-stakes credit economy.
+### 3. Credit Deduction at Intent Time with TTL Refund (Upload Saga)
+**Observation:** The original design deducted credits on upload completion (MinIO webhook). This left a race window and didn't charge for abandoned uploads. The Upload Saga inverts this: credits are deducted atomically at intent time via PyFlink's conditional SQL (`INSERT ... WHERE balance >= 1`).
+**Decision:** Deduct at intent, refund on expiry. The `credit_check_processor.py` atomically checks and deducts in a single SQL query (no race window). If the upload doesn't complete within 15 minutes, the `ttl_expiry_processor.py` emits `FileUploadExpired`, and `credit_balance_processor.sql` refunds +1 credit. This ensures users are never permanently charged for failed uploads while eliminating the multi-URL race condition.
+
+### 3b. TTL Processor Keys by file_path, Not request_id
+**Observation:** The `upload.signed` event has `request_id` but `upload.events` (MinIO webhook) does not — there's no way to correlate them by request. Both events share `file_path`.
+**Decision:** The TTL processor keys its dual-stream `KeyedCoProcessFunction` by `file_path`. This correctly correlates signed URLs with their upload completions. Trade-off: if the same file_path is re-signed (e.g., on retry), the second signed event overwrites state and resets the timer.
+
+### 3c. FileUploadExpired Schema Gap: file_size and media_type
+**Observation:** The `FileUploadExpired` Avro schema requires `file_size` and `media_type`, but `upload.signed` (the TTL processor's primary input) doesn't carry them — they live on `upload.approved`.
+**Decision:** Default to `0` and `""` for now. Downstream consumers (credit refund, expired cleanup, notifications) don't depend on these fields for correctness. A future enhancement could add `upload.approved` as a third input stream to the TTL processor.
+
+### 3d. Remove Old Deduction Paths When Adding a Saga
+**Observation:** After implementing the Upload Saga (credit deduction at intent time in `credit_check_processor.py`), the old Flink SQL deduction in `credit_balance_processor.sql` was left in place. Both paths converge on `public.media.upload.events` when the file lands in MinIO, causing a double deduction: -1 at intent approval AND -1 at file arrival. The Flink SQL processor has no way to distinguish saga uploads from legacy uploads.
+**Decision:** When moving a side effect (like credit deduction) from a downstream processor to an upstream saga, always remove the downstream logic completely. Credit deduction must happen at exactly one point — the authorization boundary. The `credit_balance_processor.sql` now only creates `media_files` rows and handles expired-upload refunds; all upload credit logic lives in the saga.
 
 ### 4. CORS Required for Browser-Direct Presigned URL Uploads
 **Observation:** When the browser uploads directly to MinIO/GCS via a presigned PUT URL, the request is cross-origin (different port/domain than the frontend). Without CORS headers on the storage bucket, the browser blocks the upload with an opaque network error.
@@ -158,7 +170,19 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 **Decision:** Set `restart-strategy: exponential-delay` in `flinkConfiguration` with a 5s initial backoff, 5min max, and 10 max attempts. This recovers automatically from transient failures (JDBC timeouts, momentary connection exhaustion) without operator intervention. The retry count cap prevents infinite loops on permanent failures.
 
-### 13. Postgres Connection Exhaustion Kills Flink Silently
+### 13. Flink `avro-confluent` Format Auto-Generates Schema Names
+
+**Observation:** When Flink's `avro-confluent` Kafka sink format serializes records, it auto-generates an Avro schema name from the SQL table definition (e.g., `upload_rejected_sink` or `record`). If a schema is already registered under the same subject with a different record name (e.g., `public.media.FileUploadRejected`), the Schema Registry's BACKWARD compatibility check catches the name change and returns a 409 `NAME_MISMATCH` error. The Flink job then enters a crash loop.
+
+**Decision:** For subjects where Flink is the sole producer via `avro-confluent` format, set compatibility to `NONE` in the Schema Registry. This allows Flink's auto-generated schema to coexist with the canonical Avro schema. The affected subjects (`public.media.upload.approved-value`, `public.media.upload.rejected-value`, `public.media.download.rejected-value`) are set to NONE in the `schemas:register` task. An alternative (not pursued) would be to serialize Avro records manually with explicit schema names, but that eliminates the convenience of Flink SQL sinks.
+
+### 14. E2E Tests Need a Flink Warmup Gate After Fresh Deploy
+
+**Observation:** After `task purge && task init`, the FlinkDeployment CRD reports `RUNNING / STABLE` within seconds, but the taskmanager takes ~2 minutes to fully initialize (compile SQL, connect to Kafka, start consuming). E2E tests that run immediately after init hit a 30-second timeout because Flink isn't processing events yet. The notification eventually appears in the database — just 2+ minutes late.
+
+**Decision:** Added a `warmup.mjs` canary test to `run_all.sh` that signs up a throwaway user and polls for the `identity.signup` notification with a generous 3-minute timeout. If the canary succeeds, Flink is ready and all subsequent tests use standard 30s timeouts. If it fails, the pipeline is genuinely broken — not just slow. This eliminates false negatives from cold-start timing without inflating every test's timeout.
+
+### 15. Postgres Connection Exhaustion Kills Flink Silently
 
 **Observation:** Local Supabase has a limited connection pool. Long-running Flink JDBC sink sessions can exhaust it, causing `FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute`. Once this occurs, Flink's JDBC reconnect fails, triggering the restart strategy (or killing the job permanently if no strategy is set). The symptom is uploads succeeding (MinIO → Kafka event produced) but files never appearing in My Files and no Live Events notification.
 

@@ -1,6 +1,6 @@
-import { signUpTestUser, signInTestUser, waitForNotification, waitForRow, getCreditBalance, cleanupUser, runTest, sleep, API_GATEWAY_URL } from './helpers.mjs'
+import { signUpTestUser, signInTestUser, waitForRow, getCreditBalance, cleanupUser, runTest, API_GATEWAY_URL } from './helpers.mjs'
 
-const passed = await runTest('Media upload → presigned URL → MinIO → credit deduction + media_files', async () => {
+const passed = await runTest('Media upload → presigned URL → MinIO → media_files', async () => {
   // 1. Sign up a fresh user (triggers Flink +2 credit via signup event)
   const { user, email, password } = await signUpTestUser()
   console.log(`  Created test user: ${email} (${user.id})`)
@@ -96,19 +96,10 @@ const passed = await runTest('Media upload → presigned URL → MinIO → credi
     if (mediaRow.status !== 'active') throw new Error(`Expected status='active', got ${mediaRow.status}`)
     if (mediaRow.media_type !== 'image/png') throw new Error(`Expected media_type='image/png', got ${mediaRow.media_type}`)
 
-    // 7. Verify credit was deducted
-    const uploadLedger = await waitForRow('credit_ledger', { user_id: user.id, event_type: 'credit.media_upload' }, { timeoutMs: 10000 })
-    console.log(`  credit_ledger deduction: amount=${uploadLedger.amount}`)
-    if (uploadLedger.amount !== -1) throw new Error(`Expected amount=-1, got ${uploadLedger.amount}`)
-
+    // 7. Verify credits remain unchanged (sync path does not deduct — use saga for credit-gated uploads)
     const finalBalance = await getCreditBalance(user.id)
-    console.log(`  Final credit balance: ${finalBalance}`)
-    if (finalBalance !== 1) throw new Error(`Expected final balance=1, got ${finalBalance}`)
-
-    // 8. Verify credit.balance_changed notification was emitted for the upload
-    const uploadNotif = await waitForNotification(user.id, 'credit.balance_changed', { timeoutMs: 10000 })
-    const notifPayload = JSON.parse(uploadNotif.payload)
-    console.log(`  credit.balance_changed notification: ${JSON.stringify(notifPayload)}`)
+    console.log(`  Final credit balance: ${finalBalance} (unchanged — sync path, no credit deduction)`)
+    if (finalBalance !== 2) throw new Error(`Expected balance=2 (unchanged), got ${finalBalance}`)
 
   } finally {
     await cleanupUser(user.id)

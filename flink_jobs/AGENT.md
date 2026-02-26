@@ -22,3 +22,5 @@ Then delete + re-apply the FlinkDeployment:
 kubectl delete -f kubernetes/flink-deployment.yaml
 kubectl apply -f kubernetes/flink-deployment.yaml
 ```
+
+**K8s imagePullPolicy:** All local dev FlinkDeployment manifests must use `imagePullPolicy: Never`. OrbStack shares the Docker daemon with K8s — `Never` tells K8s to use locally-built images directly without attempting registry pulls. `IfNotPresent` can silently use stale cached images after rebuilds, and `Always` fails because local images (e.g., `pyflink-custom:1.18.0`) don't exist in any registry.

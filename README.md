@@ -15,7 +15,7 @@ See [architecture.md](./architecture.md) for a detailed architecture diagram and
 *   **Container Runtime:** OrbStack (Optimized for Apple Silicon, running Docker and Kubernetes)
 *   **Identity & Read DB:** Supabase CLI (PostgreSQL, GoTrue, Realtime)
 *   **Ingress Gateway:** Go custom microservice (`api-gateway`)
-*   **Background Consumers:** Go custom microservices (`message-consumer`)
+*   **Background Consumers:** Go custom microservices (`message-consumer`, `media-service`)
 *   **Message Broker:** Redpanda (Kafka-compatible with native Iceberg Tiered Storage)
 *   **Schema Registry:** Confluent Schema Registry (Avro)
 *   **Stream Processor:** Apache Flink (Stateful SQL & Python processing)
@@ -47,34 +47,40 @@ See [architecture.md](./architecture.md) for a detailed architecture diagram and
 5. **Egress (Realtime):** The Consumer executes a prepared Postgres INSERT into the unified `public.user_notifications` table (event type `user.message`, JSON payload containing email and message text). Each message carries a `visibility` field (`broadcast` or `direct`) and an optional `recipient_id` for targeted delivery.
 6. **Websockets:** Supabase catches the `user_notifications` insertion on its logical replication hook and fires a payload over `supabase_realtime` websockets. RLS policies scope delivery: broadcast messages reach all authenticated clients, while direct messages are only visible to the sender and the designated recipient. The frontend parses the `event_type` and `payload` fields to render the notification.
 
-### Feature Flow (Media File Upload + Credit Economy)
-1. **Action:** An authenticated user selects a file to upload on the Vite Frontend.
-2. **Credit Check:** The Frontend calls `POST /api/v1/media/upload-url` with the Supabase JWT. The Go API Gateway queries the `user_credit_balances` Postgres view — if the user has insufficient credits, it returns `402 Payment Required` (via `InsufficientCreditsError`).
-3. **Presigned URL (Claim Check Pattern):** On success, the Gateway generates a MinIO/S3 presigned PUT URL and returns it to the client. The raw file never touches the API Gateway or Kafka — only metadata flows through the event pipeline.
-4. **Browser-Direct Upload:** The Frontend uploads the file directly to MinIO/GCS using the presigned URL, bypassing the API Gateway entirely.
-5. **Storage Event Bridge:** MinIO fires an S3 event notification webhook to `POST /webhooks/media-upload` on the API Gateway. The handler (`media_webhook_handler.go`) transforms the MinIO event format into an Avro-compatible `NewFileUploaded` event and produces it to `public.media.upload.events`.
-6. **Stream Processing (Flink):** The `credit_balance_processor.sql` consumes upload events and executes 3 operations: deducts 1 credit in `credit_ledger`, persists file metadata in `media_files`, and inserts a `credit.balance_changed` notification into `user_notifications`. Signup events also flow through this processor, granting +2 initial credits.
-7. **Egress (Realtime):** The `credit.balance_changed` notification surfaces via the existing Supabase Realtime channel on `user_notifications`.
+### Feature Flow (Upload Saga — Fully Async Media Upload + Credit Economy)
+The media upload pipeline is a **fully async event-driven saga** spanning 4 services and 12 Kafka topics. Every state transition is a first-class event — no silent DB writes.
+
+1. **Intent Submission:** The Frontend calls `POST /api/v1/media/upload-intent` with the Supabase JWT and file metadata (`file_name`, `media_type`, `file_size`). The API Gateway returns `202 Accepted` with a `request_id` and produces an `UploadIntent` event to `internal.media.upload.intent`.
+2. **Credit Check (PyFlink):** The `credit_check_processor.py` (PyFlink DataStream) consumes the intent, atomically checks and deducts 1 credit via a conditional SQL query (`WHERE balance >= 1`), and routes to either `public.media.upload.approved` or `public.media.upload.rejected`.
+3. **Presigned URL Generation (Media Service):** The `media-service` Go consumer picks up `upload.approved`, generates a presigned PUT URL via MinIO, and emits `FileUploadUrlSigned` to `public.media.upload.signed`.
+4. **Notification (Flink SQL):** The `media_notification_processor.sql` consumes `upload.signed` and inserts a `media.upload_ready` notification (with `upload_url`, `file_path`, `request_id`) into `user_notifications`. On rejection, it inserts `media.upload_rejected` with the reason.
+5. **Realtime Delivery:** Supabase Realtime pushes the notification to the Frontend via the existing WebSocket subscription.
+6. **Browser-Direct Upload (Claim Check Pattern):** The Frontend uploads the file directly to MinIO using the presigned URL. The raw file never touches the API Gateway or Kafka.
+7. **Upload Completion:** MinIO fires an S3 webhook to `POST /webhooks/media-upload`. The API Gateway transforms it into a `NewFileUploaded` event on `public.media.upload.events`. Flink persists file metadata in `media_files` and emits `media.upload_completed`.
+8. **TTL Expiry Saga (PyFlink):** The `ttl_expiry_processor.py` (`KeyedCoProcessFunction`) consumes both `upload.signed` and `upload.events`, keyed by `file_path`. It arms a 15-minute processing-time timer. If the upload completes before the timer fires, the state is cleared. If not, it emits `FileUploadExpired` to `public.media.expired.events`, triggering a credit refund (+1 via `credit_balance_processor.sql`) and best-effort MinIO object removal (via `media-service`). MinIO's 24h lifecycle policy acts as a backstop.
 
 > [!NOTE]
-> **Credit Deduction Timing:** Credits are deducted asynchronously on upload *completion* (when MinIO fires the webhook), not at presigned URL request time. This prevents charging users for failed or abandoned uploads. The `credit_ledger` table is append-only (no UPDATEs), providing a full audit trail and fitting the Flink JDBC append-only sink pattern.
+> **Credit Deduction Timing:** Credits are deducted **at intent time** (atomic SQL in PyFlink), not at upload completion. If the upload fails or is abandoned, the TTL saga automatically refunds the credit after 15 minutes. This ensures users are never permanently charged for incomplete uploads.
 
-### Feature Flow (Media File Download)
-1. **Action:** An authenticated user clicks the download button on a file in the Media Browser.
-2. **Presigned GET URL:** The Frontend calls `POST /api/v1/media/download-url` with the Supabase JWT and `file_path`. The Go API Gateway verifies file ownership by querying `media_files` (active files only) and generates a presigned GET URL from MinIO/S3.
-3. **Kafka Event:** The Gateway emits a `FileDownloaded` event to `public.media.download.events` for audit/analytics.
-4. **Browser Download:** The Frontend opens the presigned GET URL in a new tab, downloading the file directly from MinIO/GCS.
+### Feature Flow (Download Saga — Async Presigned GET URL)
+1. **Intent:** The Frontend calls `POST /api/v1/media/download-intent` with the JWT and `file_path`. Returns `202 Accepted` with `request_id`.
+2. **Media Service:** Consumes `internal.media.download.intent`, verifies file ownership via `media_files` (active files only), generates a presigned GET URL, and emits `FileDownloadUrlSigned` to `public.media.download.signed`. If the file isn't found, emits `FileDownloadRejected`.
+3. **Notification:** Flink routes `download.signed` to a `media.download_ready` notification (with `download_url`) or `download.rejected` to `media.download_rejected`.
+4. **Browser Download:** The Frontend receives the URL via Realtime and opens it in a new tab.
 
-### Feature Flow (Media File Delete)
-1. **Action:** An authenticated user clicks the delete button on a file in the Media Browser.
-2. **Soft Delete:** The Frontend calls `POST /api/v1/media/delete` with the Supabase JWT and `file_path`. The Go API Gateway verifies file ownership and sets `status = 'deleted'` in `media_files`. No credit refund.
-3. **Kafka Event:** The Gateway emits a `FileDeleted` event to `public.media.delete.events` for audit/analytics.
-4. **Immediate Effect:** RLS policies filter `status = 'active'` only, so the file vanishes from all user queries and the Media Browser immediately.
+### Feature Flow (Delete Saga — Async Soft-Delete + MinIO Removal)
+1. **Intent:** The Frontend calls `POST /api/v1/media/delete-intent` with the JWT and `file_path`. Returns `202 Accepted` with `request_id`.
+2. **Media Service:** Consumes `internal.media.delete.intent`, verifies ownership, removes the object from MinIO, soft-deletes the DB row (`status='deleted'`), and emits `FileDeleted` to `public.media.delete.events`. On failure, emits `FileDeleteRejected`.
+3. **Notification:** Flink routes `delete.events` to `media.file_deleted` and `delete.rejected` to `media.delete_rejected`.
+4. **Immediate Effect:** RLS policies filter `status = 'active'` only, so the file vanishes from all user queries.
+
+> [!NOTE]
+> **Delete Ordering:** MinIO object removal happens *before* the DB soft-delete. If MinIO fails, the file still exists and the user can retry. If the DB fails after MinIO succeeds, the object is gone but the soft-delete can be retried (idempotent).
 
 ### Additional Processing & Storage
-*   **Media File Storage (MinIO / GCS):** Uploaded media files are stored in the `media-uploads` MinIO bucket (GCS in production). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
+*   **Media File Storage (MinIO / GCS):** Uploaded media files are stored in the `media-uploads` MinIO bucket (GCS in production) with a 24h lifecycle policy for orphaned uploads. Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
 *   **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
-*   **PyFlink Microservice:** A Python Flink application runs natively in K8s, consuming from the `public.identity.login.events` and `public.identity.signup.events` topics and echoing streams structurally to `PyEchoEvent`.
+*   **PyFlink Microservices:** Two Python Flink applications run natively in K8s: `credit_check_processor.py` (atomic credit check + deduction for upload intents) and `ttl_expiry_processor.py` (dual-stream `KeyedCoProcessFunction` for upload timeout saga). Plus `echo_processor.py` for identity event echo.
 
 ---
 
@@ -96,9 +102,12 @@ When extending or maintaining this platform, **strict adherence to framework and
 - `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
 - `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
 - `tests/e2e/`: End-to-end pipeline tests validating the full data flow into `user_notifications`.
+- `github_cicd_plan.md`: Roadmap for GitHub Actions, multisite runners, and the "Lean CI" profile.
+- `data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
+- `data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
 - `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
-- `pyflink_jobs/`: Python Flink scripts (e.g., `echo_processor.py`).
-- `go-services/`: Go microservices (`api-gateway`, `message-consumer`).
+- `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`).
+- `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).
 - `kubernetes/`: Kubernetes deployment manifests for Flink, Go services, and Flink Operator.
 - `supabase/`: Database migrations and webhook configurations.
 - `telemetry/`: Telemetry configuration files (Prometheus, Grafana, Loki, OpenTelemetry).
