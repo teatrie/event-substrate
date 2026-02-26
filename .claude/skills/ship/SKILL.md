@@ -56,10 +56,13 @@ PR 3: ...
 ### Step 4: Wait for Approval
 
 **Stop and ask the user** to confirm the grouping using the AskUserQuestion tool. Present clear options:
-- "Looks good, proceed"
+- "Looks good, proceed and merge" — create PRs and merge them sequentially (delete branch after each merge)
+- "Looks good, create PRs only" — create PRs but do not merge
 - "I want to adjust the grouping" (let the user describe changes, then re-plan)
 
 **Do NOT create any branches or PRs until the user approves.**
+
+**If the user selects "proceed and merge":** after creating each PR, immediately merge it with `gh pr merge <number> --merge --delete-branch`, then pull `origin/main` before branching for the next PR. This collapses the stacked-PR complexity — each PR branches from and merges to `main` in sequence.
 
 ---
 
@@ -138,9 +141,9 @@ After merging PR 1, update PR 2's base to `main` (GitHub may do this automatical
 
 ## Rules
 
-- **Never auto-merge.** Create PRs only — the user reviews and merges.
+- **Only merge if the user chose "proceed and merge".** If they chose "create PRs only", never merge.
 - **Never force-push.** If something goes wrong, report it and stop.
 - **Clean up on failure.** If a step fails mid-execution, report what was created so the user can clean up.
-- **Return to main.** After all PRs are created, `git checkout main` so the working tree is back to the starting branch.
+- **Return to main.** After all PRs are created (and merged, if applicable), `git checkout main` so the working tree is back to the starting branch.
 - **Respect user hints.** If `$ARGUMENTS` contains grouping preferences (e.g., "keep docs separate", "group all infra"), honor them.
 - **Audit ignore files.** Never commit compiled binaries, cache dirs, or agent state. If `.gitignore` or `.claudeignore` need updates, include them in the first PR.
