@@ -1,0 +1,11 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "FileReady",
+  "doc": "Emitted when a file appears in the permanent prefix (files/). Confirms the MoveObject operation succeeded.",
+  "fields": [
+    {"name": "file_path", "type": "string", "doc": "Object storage path in permanent prefix (e.g. files/<user_id>/<uuid>/<file_name>)."},
+    {"name": "file_size", "type": "long", "doc": "File size in bytes."},
+    {"name": "upload_time", "type": "string", "doc": "ISO 8601 timestamp of file detection in permanent prefix."}
+  ]
+}

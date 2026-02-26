@@ -1,0 +1,17 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "UploadReceived",
+  "doc": "Emitted when a completed upload is detected in staging (uploads/ prefix). Triggers the move-to-permanent saga.",
+  "fields": [
+    {"name": "user_id", "type": "string", "doc": "The unique identifier of the uploading user."},
+    {"name": "email", "type": "string", "doc": "The email address of the uploading user."},
+    {"name": "file_path", "type": "string", "doc": "Object storage path in staging (e.g. uploads/<user_id>/<uuid>/<file_name>)."},
+    {"name": "file_name", "type": "string", "doc": "Original file name as provided by the client."},
+    {"name": "file_size", "type": "long", "doc": "File size in bytes."},
+    {"name": "media_type", "type": "string", "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."},
+    {"name": "upload_time", "type": "string", "doc": "ISO 8601 timestamp of upload detection."},
+    {"name": "permanent_path", "type": "string", "doc": "Target object storage path in permanent prefix (e.g. files/<user_id>/<uuid>/<file_name>)."},
+    {"name": "retry_count", "type": "int", "default": 0, "doc": "Number of move retries attempted. 0 on first attempt."}
+  ]
+}
