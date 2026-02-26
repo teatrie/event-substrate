@@ -16,6 +16,17 @@ You are a single subagent (Sonnet-tier). Your job is to analyze the dirty workin
 
 Run `git status` and `git diff --stat` to see all modified, untracked, and deleted files. For each changed file, read the diff (`git diff <file>` for tracked files, `cat` for untracked) to understand the nature of the change.
 
+### Step 1b: Ignore File Audit
+
+Before grouping, check `.gitignore` and `.claudeignore` against the untracked files:
+
+- **Compiled binaries** (Go binaries, `.pyc`, `node_modules/`, `dist/`) — must be in `.gitignore`
+- **Cache/temp directories** (`.pytest_cache/`, `__pycache__/`, `.task/`, `tmp/`, `temp/`) — must be in `.gitignore`
+- **Auto-generated agent state** (`.claude/projects/`, `.claude/history/`) — must be in `.gitignore`
+- **Large non-essential files** (`go.sum`, vendor locks, binary assets) — should be in `.claudeignore` (context optimization, still tracked by git)
+
+If any untracked file should be ignored rather than committed, add the pattern to the appropriate ignore file and include that update in the first PR (or a dedicated housekeeping PR).
+
 ### Step 2: Group into PRs
 
 Group files into logical PRs based on:
@@ -132,3 +143,4 @@ After merging PR 1, update PR 2's base to `main` (GitHub may do this automatical
 - **Clean up on failure.** If a step fails mid-execution, report what was created so the user can clean up.
 - **Return to main.** After all PRs are created, `git checkout main` so the working tree is back to the starting branch.
 - **Respect user hints.** If `$ARGUMENTS` contains grouping preferences (e.g., "keep docs separate", "group all infra"), honor them.
+- **Audit ignore files.** Never commit compiled binaries, cache dirs, or agent state. If `.gitignore` or `.claudeignore` need updates, include them in the first PR.
