@@ -72,10 +72,11 @@ async function uploadViaSaga(token, userId, fileName) {
   console.log(`    File PUT to MinIO (${testFileContent.length} bytes)`)
 
   // Wait for media_files row to appear (Flink processes MinIO webhook)
-  await waitForRow('media_files', { user_id: userId, file_name: fileName }, { timeoutMs: 60000 })
-  console.log(`    media_files row confirmed (status=active)`)
+  // With the move-to-permanent saga, media_files.file_path is now files/... (permanent path)
+  const mediaRow = await waitForRow('media_files', { user_id: userId, file_name: fileName }, { timeoutMs: 60000 })
+  console.log(`    media_files row confirmed (status=active, file_path=${mediaRow.file_path})`)
 
-  return { filePath }
+  return { filePath: mediaRow.file_path }
 }
 
 const passed = await runTest('Download + Delete Saga: async intent endpoints → notifications → RLS verification', async () => {
@@ -266,4 +267,110 @@ const passed = await runTest('Download + Delete Saga: async intent endpoints →
   }
 })
 
-process.exit(passed ? 0 : 1)
+// ---------------------------------------------------------------------------
+// Test 2: after file_deleted notification arrives, file is no longer visible
+// (status != 'active') in media_files.
+// This catches the bug where the delete waiter matched on request_id instead
+// of file_path — media.file_deleted has no request_id in its payload, only
+// file_path and file_name, so matching on request_id always timed out.
+// ---------------------------------------------------------------------------
+const passed2 = await runTest('Delete saga: file not visible in media_files after file_deleted notification', async () => {
+  // 1. Sign up a fresh user
+  const { user, email, password } = await signUpTestUser()
+  console.log(`  Created test user: ${email} (${user.id})`)
+
+  try {
+    // 2. Wait for credit initialization
+    await waitForRow('credit_ledger', { user_id: user.id, event_type: 'credit.signup_bonus' }, { timeoutMs: 45000 })
+
+    // 3. Sign in
+    const session = await signInTestUser(email, password)
+    const token = session.access_token
+    console.log(`  Signed in, got access token`)
+
+    // 4. Upload a file via the saga so we have something to delete
+    console.log(`  Uploading file via upload saga...`)
+    const { filePath } = await uploadViaSaga(token, user.id, 'e2e-delete-notification-test.png')
+    console.log(`  File uploaded, file_path=${filePath}`)
+
+    // 5. POST delete-intent
+    console.log(`  Requesting delete intent for file_path=${filePath}...`)
+    const deleteIntentRes = await fetch(`${API_GATEWAY_URL}/api/v1/media/delete-intent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ file_path: filePath })
+    })
+
+    if (deleteIntentRes.status !== 202) {
+      const errBody = await deleteIntentRes.text()
+      throw new Error(`Expected 202 from delete-intent, got ${deleteIntentRes.status}: ${errBody}`)
+    }
+
+    const { request_id: deleteRequestId } = await deleteIntentRes.json()
+    console.log(`  Got delete request_id=${deleteRequestId}`)
+
+    // 6. Wait for media.file_deleted notification.
+    //    The notification payload has file_path and file_name but NO request_id.
+    //    The waiter must match on file_path, not request_id.
+    console.log(`  Waiting for media.file_deleted notification...`)
+    const fileDeletedNotif = await waitForNotification(user.id, 'media.file_deleted', { timeoutMs: 60000 })
+    const fileDeletedPayload = JSON.parse(fileDeletedNotif.payload)
+    console.log(`  Received media.file_deleted: file_path=${fileDeletedPayload.file_path}, file_name=${fileDeletedPayload.file_name}`)
+
+    if (!fileDeletedPayload.file_path) throw new Error('Missing file_path in media.file_deleted payload')
+    if (fileDeletedPayload.file_path !== filePath) {
+      throw new Error(`file_path mismatch in file_deleted: expected ${filePath}, got ${fileDeletedPayload.file_path}`)
+    }
+
+    // 7. NOW verify the file is no longer active in media_files.
+    //    This is the state the frontend would see when it calls refreshMediaBrowser()
+    //    after receiving the file_deleted notification.
+    //    Use admin client to bypass RLS and confirm the soft-delete status.
+    if (adminClient) {
+      await sleep(2000)  // Small delay for DB update propagation
+
+      const { data: adminRows, error: adminErr } = await adminClient
+        .from('media_files')
+        .select('*')
+        .eq('file_path', filePath)
+        .limit(1)
+
+      if (adminErr) throw new Error(`Admin query failed: ${adminErr.message}`)
+      if (!adminRows || adminRows.length === 0) {
+        throw new Error('Expected soft-deleted row to still exist in media_files, but none found')
+      }
+
+      const row = adminRows[0]
+      console.log(`  Admin view after file_deleted notification: status=${row.status}`)
+
+      if (row.status === 'active') {
+        throw new Error(`File is still status='active' after file_deleted notification — Flink delete pipeline not complete`)
+      }
+      console.log(`  Confirmed: file is no longer active (status=${row.status}) after file_deleted notification`)
+    } else {
+      console.log(`  WARN: No admin client available — skipping admin-level status verification`)
+    }
+
+    // 8. Verify RLS hides the file from user queries — this is what the frontend media browser would see
+    const userClient = createUserClient(token)
+    const { data: userRows, error: userErr } = await userClient
+      .from('media_files')
+      .select('*')
+      .eq('file_path', filePath)
+      .limit(1)
+
+    if (userErr) throw new Error(`User RLS query failed: ${userErr.message}`)
+    if (userRows && userRows.length > 0) {
+      throw new Error(`Expected RLS to hide deleted file from user media browser, but query returned ${userRows.length} row(s) with status=${userRows[0].status}`)
+    }
+    console.log(`  RLS correctly hides deleted file — frontend media browser would show no entry`)
+
+  } finally {
+    await cleanupUser(user.id)
+  }
+})
+
+process.exit(passed && passed2 ? 0 : 1)

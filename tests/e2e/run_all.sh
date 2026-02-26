@@ -40,6 +40,8 @@ TESTS=(
   test_media_download_delete.mjs
   test_upload_saga.mjs
   test_download_delete_saga.mjs
+  test_move_saga.mjs
+  test_saga_timer_health.mjs
 )
 
 PASSED=0

@@ -87,10 +87,14 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
     console.log(`  File uploaded to MinIO (${testFileContent.length} bytes)`)
 
     // 6. Wait for Flink to process the upload event (MinIO webhook -> Kafka -> Flink -> media_files)
+    //    With the move-to-permanent saga, media_files.file_path is now files/... (not uploads/...)
     console.log(`  Waiting for Flink to process upload event...`)
     const mediaRow = await waitForRow('media_files', { user_id: user.id, file_name: 'e2e-download-delete-test.png' }, { timeoutMs: 60000 })
-    console.log(`  media_files entry: file_name=${mediaRow.file_name}, status=${mediaRow.status}`)
+    console.log(`  media_files entry: file_name=${mediaRow.file_name}, file_path=${mediaRow.file_path}, status=${mediaRow.status}`)
     if (mediaRow.status !== 'active') throw new Error(`Expected status='active', got ${mediaRow.status}`)
+
+    // Use the permanent file_path from media_files for download/delete operations
+    const permanentPath = mediaRow.file_path
 
     // 7. DOWNLOAD: Request presigned download URL
     console.log(`  Requesting presigned download URL...`)
@@ -100,7 +104,7 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ file_path: filePath })
+      body: JSON.stringify({ file_path: permanentPath })
     })
 
     if (downloadRes.status === 404 || downloadRes.status === 501) {
@@ -132,7 +136,7 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ file_path: filePath })
+      body: JSON.stringify({ file_path: permanentPath })
     })
 
     if (deleteRes.status === 404 || deleteRes.status === 501) {
@@ -155,7 +159,7 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
       const { data: adminRows, error: adminErr } = await adminClient
         .from('media_files')
         .select('*')
-        .eq('file_path', filePath)
+        .eq('file_path', permanentPath)
         .limit(1)
 
       if (adminErr) throw new Error(`Admin query failed: ${adminErr.message}`)
@@ -173,7 +177,7 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
     const { data: userRows, error: userErr } = await userClient
       .from('media_files')
       .select('*')
-      .eq('file_path', filePath)
+      .eq('file_path', permanentPath)
       .limit(1)
 
     if (userErr) throw new Error(`User query failed: ${userErr.message}`)
@@ -190,7 +194,7 @@ const passed = await runTest('Media download + delete: presigned GET URL + soft-
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ file_path: filePath })
+      body: JSON.stringify({ file_path: permanentPath })
     })
 
     if (postDeleteDownloadRes.status === 200) {
