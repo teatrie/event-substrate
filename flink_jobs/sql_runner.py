@@ -92,6 +92,41 @@ def register_kafka_sources(t_env):
             'group_id': 'flink-media-consumer',
             'fields': '`user_id` STRING, `email` STRING, `file_path` STRING, `file_name` STRING, `file_size` BIGINT, `media_type` STRING, `upload_time` STRING',
         },
+        'media_expired_events': {
+            'topic': 'public.media.expired.events',
+            'group_id': 'flink-expired-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `file_name` STRING, `file_size` BIGINT, `media_type` STRING, `request_id` STRING, `request_time` STRING, `expired_time` STRING',
+        },
+        'upload_signed_events': {
+            'topic': 'public.media.upload.signed',
+            'group_id': 'flink-upload-signed-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `file_name` STRING, `upload_url` STRING, `expires_in` INT, `request_id` STRING, `signed_time` STRING',
+        },
+        'upload_rejected_events': {
+            'topic': 'public.media.upload.rejected',
+            'group_id': 'flink-upload-rejected-consumer',
+            'fields': '`user_id` STRING, `file_name` STRING, `media_type` STRING, `file_size` BIGINT, `request_id` STRING, `reason` STRING, `rejected_time` STRING',
+        },
+        'download_signed_events': {
+            'topic': 'public.media.download.signed',
+            'group_id': 'flink-download-signed-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `download_url` STRING, `expires_in` INT, `request_id` STRING, `signed_time` STRING',
+        },
+        'download_rejected_events': {
+            'topic': 'public.media.download.rejected',
+            'group_id': 'flink-download-rejected-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `request_id` STRING, `reason` STRING, `rejected_time` STRING',
+        },
+        'media_delete_events': {
+            'topic': 'public.media.delete.events',
+            'group_id': 'flink-delete-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `file_name` STRING, `media_type` STRING, `file_size` BIGINT, `delete_time` STRING',
+        },
+        'delete_rejected_events': {
+            'topic': 'public.media.delete.rejected',
+            'group_id': 'flink-delete-rejected-consumer',
+            'fields': '`user_id` STRING, `file_path` STRING, `request_id` STRING, `reason` STRING, `rejected_time` STRING',
+        },
     }
 
     # Register unified events Kafka sink (avoids JAAS semicolon issue with SQL file splitting)

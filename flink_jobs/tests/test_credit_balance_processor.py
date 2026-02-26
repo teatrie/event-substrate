@@ -307,7 +307,11 @@ class TestCreditBalanceSQLSinks:
 
 
 class TestCreditBalanceSQLInserts:
-    """Verify the 5 INSERT INTO statements and their logic."""
+    """Verify the 5 INSERT INTO statements and their logic.
+
+    Credit deduction for media uploads is handled by credit_check_processor.py
+    (saga path), NOT by this SQL processor. This avoids double-deduction.
+    """
 
     def test_contains_five_insert_statements(self):
         sql = _strip_comments(_read_sql())
@@ -361,54 +365,7 @@ class TestCreditBalanceSQLInserts:
         assert match
         assert "Welcome bonus: 2 credits" in match.group(1)
 
-    # -- INSERT 2: media_upload -> credit_ledger_sink (deduction) ------------
-
-    def test_media_upload_credit_ledger_insert_exists(self):
-        """An INSERT INTO credit_ledger_sink selecting from media_upload_events must exist."""
-        sql = _strip_comments(_read_sql())
-        assert re.search(
-            r"INSERT\s+INTO\s+credit_ledger_sink.*?FROM\s+media_upload_events",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-
-    def test_media_upload_deduction_amount_is_negative_one(self):
-        """The upload deduction INSERT must use amount = -1."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_ledger_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match, "Upload -> credit_ledger_sink INSERT not found"
-        assert re.search(r"-\s*1", match.group(1)), "Expected amount -1 in upload deduction"
-
-    def test_media_upload_deduction_event_type(self):
-        """The upload deduction INSERT must use event_type 'credit.media_upload'."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_ledger_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        assert "credit.media_upload" in match.group(1)
-
-    def test_media_upload_deduction_description_uses_concat(self):
-        """The upload deduction description must CONCAT with file_name."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_ledger_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        block = match.group(1)
-        assert re.search(r"CONCAT\s*\(.*?file_name", block, re.IGNORECASE | re.DOTALL), (
-            "Expected CONCAT with file_name in upload description"
-        )
-
-    # -- INSERT 3: media_upload -> media_files_sink --------------------------
+    # -- INSERT 2: media_upload -> media_files_sink --------------------------
 
     def test_media_files_insert_exists(self):
         """An INSERT INTO media_files_sink selecting from media_upload_events must exist."""
@@ -452,7 +409,7 @@ class TestCreditBalanceSQLInserts:
         assert match
         assert "media_type" in match.group(1)
 
-    # -- INSERT 4: signup -> credit_notification_sink ------------------------
+    # -- INSERT 3: signup -> credit_notification_sink ------------------------
 
     def test_signup_notification_insert_exists(self):
         """An INSERT INTO credit_notification_sink from signup_events must exist."""
@@ -501,64 +458,6 @@ class TestCreditBalanceSQLInserts:
         )
         assert match
         assert "signup_bonus" in match.group(1)
-
-    # -- INSERT 5: media_upload -> credit_notification_sink ------------------
-
-    def test_media_upload_notification_insert_exists(self):
-        """An INSERT INTO credit_notification_sink from media_upload_events must exist."""
-        sql = _strip_comments(_read_sql())
-        assert re.search(
-            r"INSERT\s+INTO\s+credit_notification_sink.*?FROM\s+media_upload_events",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-
-    def test_media_upload_notification_event_type(self):
-        """The upload notification must use event_type 'credit.balance_changed'."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_notification_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        assert "credit.balance_changed" in match.group(1)
-
-    def test_media_upload_notification_payload_has_negative_one(self):
-        """The upload notification JSON payload must contain amount=-1."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_notification_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        block = match.group(1)
-        assert re.search(r"'amount'.*?-\s*1", block, re.DOTALL), (
-            "Expected amount=-1 in upload notification JSON"
-        )
-
-    def test_media_upload_notification_payload_has_reason_media_upload(self):
-        """The upload notification JSON payload must contain reason='media_upload'."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_notification_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        assert "media_upload" in match.group(1)
-
-    def test_media_upload_notification_payload_has_file_name(self):
-        """The upload notification JSON payload must reference file_name."""
-        sql = _strip_comments(_read_sql())
-        match = re.search(
-            r"(INSERT\s+INTO\s+credit_notification_sink.*?FROM\s+media_upload_events)",
-            sql,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert match
-        assert "file_name" in match.group(1)
 
 
 # ===========================================================================

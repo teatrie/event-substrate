@@ -1,4 +1,5 @@
--- Kafka source tables "signup_events" and "media_upload_events" are registered centrally by sql_runner.py
+-- Kafka source tables registered centrally by sql_runner.py:
+--   signup_events, media_upload_events, media_expired_events
 
 -- 1. Credit Ledger Sink (append-only, no PK = pure INSERT)
 CREATE TABLE credit_ledger_sink (
@@ -62,17 +63,9 @@ SELECT
   signup_time
 FROM signup_events;
 
--- 5. INSERT: Media upload deduction -> credit_ledger
-INSERT INTO credit_ledger_sink
-SELECT
-  user_id,
-  -1,
-  'credit.media_upload',
-  CONCAT('Upload: ', file_name),
-  upload_time
-FROM media_upload_events;
-
--- 6. INSERT: Media upload -> media_files
+-- 5. INSERT: Media upload -> media_files
+--    Credit deduction is handled by credit_check_processor.py (saga path)
+--    at intent-approval time, NOT here at file-arrival time.
 INSERT INTO media_files_sink
 SELECT
   user_id,
@@ -93,11 +86,21 @@ SELECT
   signup_time
 FROM signup_events;
 
--- 8. INSERT: Media upload notification -> credit_notification
+-- 8. INSERT: Expired upload refund -> credit_ledger (+1 credit)
+INSERT INTO credit_ledger_sink
+SELECT
+  user_id,
+  1,
+  'credit.upload_refunded',
+  CONCAT('Refund: upload expired for ', file_name),
+  expired_time
+FROM media_expired_events;
+
+-- 10. INSERT: Expired upload refund notification -> credit_notification
 INSERT INTO credit_notification_sink
 SELECT
   user_id,
   'credit.balance_changed',
-  JSON_OBJECT('amount' VALUE -1, 'reason' VALUE 'media_upload', 'file_name' VALUE file_name),
-  upload_time
-FROM media_upload_events;
+  JSON_OBJECT('amount' VALUE 1, 'reason' VALUE 'upload_expired', 'file_name' VALUE file_name),
+  expired_time
+FROM media_expired_events;
