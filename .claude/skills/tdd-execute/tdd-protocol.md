@@ -1,30 +1,70 @@
----
-name: feature-epic
-description: Acts as a Product Manager to break down a large feature into architectural domains and executes the strict TDD loop for each.
----
-# Epic Feature Orchestration
+# TDD Protocol — Red-Green-Refactor with Git Safety Net
 
-You are acting as the Lead Technical Product Manager and Orchestrator. I am requesting a new multi-component feature: 
-$ARGUMENTS
+This protocol is referenced by both `/tdd-execute` and `/feature-epic` for the strict TDD loop.
 
-You must execute this request in two distinct phases. Do not write any implementation code yourself.
+## The 5-Step TDD Loop
 
-## PHASE 1: Domain Decomposition & Planning
-1. Analyze the requested feature.
-2. Break the feature down into strictly isolated architectural domains or components based on the logical boundaries of the system (e.g., Data Pipeline, Consumer Service, Database Schema, Web UI, etc.).
-3. For each domain, write a brief, clear implementation plan and explicitly define the data contracts/interfaces between them.
-4. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve the architecture.
+### Step 1 — PRE: Record domain start SHA
 
-## PHASE 2: Sequential TDD Execution
-Once I approve the Phase 1 plan, you will execute the implementation for EACH domain sequentially. Do not mix contexts between domains.
-        
-For the first domain, execute the following strict loop:
-1. **Pre-Step:** Use the Bash tool to run `touch .tdd-active`. Wait for success.
-2. **RED:** Call the `tdd-red` subagent. Pass it the plan for ONLY this specific domain. Instruct it to write the exhaustive failing tests. Wait for it to confirm test failure.
-3. **GREEN:** Call the `tdd-green` subagent. Point it to the failing tests and target source files. Instruct it to make the tests pass with minimal code. Wait for it to confirm test success.
-4. **REFACTOR:** Call the `tdd-refactor` subagent to clean the code while keeping tests passing.
-5. **Post-Step:** Use the Bash tool to run `rm .tdd-active`. Wait for success.
+```bash
+DOMAIN_START_SHA=$(git rev-parse HEAD)
+touch .tdd-active
+```
 
-Once the first domain is completely finished and the lockfile is removed, repeat the exact 5-step Phase 2 loop for the next domain, until all planned domains are implemented.
+### Step 2 — RED: Write failing tests
 
-Begin Phase 1 now.
+- Spawn `tdd-red` subagent with the domain plan
+- Agent writes exhaustive tests, confirms they **FAIL**
+- Tests must fail for the **RIGHT reason** (missing implementation, not syntax errors)
+
+### Step 3 — GREEN: Make tests pass with minimal code
+
+- Spawn `tdd-green` subagent with failing tests + target files
+- Agent writes **minimum code** to pass ALL tests
+- Confirm ALL tests pass
+
+**Git checkpoint (unconditional):**
+```bash
+git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
+```
+
+### Step 4 — REFACTOR: Clean the code (guarded by checkpoint)
+
+**Refactor scope (priority order):**
+1. Standards & conventions — match project patterns, language idioms
+2. Simplicity — remove unnecessary complexity, dead code, premature abstractions
+3. Readability & maintainability — clear naming, obvious flow
+4. Performance — only for obvious inefficiencies, not speculative
+
+**Constraints:**
+- ONLY touch files written/modified in this domain
+- Do NOT add abstractions, helpers, or "improvements" beyond scope
+- Do NOT touch unrelated files
+
+**Escalation chain:**
+
+| Attempt | Agent | On Failure |
+|---------|-------|------------|
+| 1 | `tdd-refactor` (current model) | `git reset --hard HEAD` (back to GREEN checkpoint) |
+| 2 | `tdd-refactor` (current model, different approach) | `git reset --hard HEAD` |
+| 3 | `tdd-refactor` (escalate to HIGHER model) | `git reset --hard HEAD` — skip refactor, code is already green |
+
+- Escalated agent gets **GREEN checkpoint code** + refactor criteria (NOT the failed diff)
+- Tests pass → continue to Step 5
+- All 3 fail → ship the GREEN code — working beats perfect
+
+### Step 5 — POST: Soft reset and domain commit
+
+```bash
+rm .tdd-active
+git reset --soft $DOMAIN_START_SHA
+# All domain changes now staged (no checkpoint clutter)
+git commit -m "feat(<domain>): <description>"
+```
+
+## Rules
+
+- GREEN checkpoint is **UNCONDITIONAL** — always commit before refactor
+- Never `--amend` the checkpoint — it's immutable until soft reset
+- Escalated agent gets clean slate (GREEN code), not the failed attempt's diff
+- If all 3 refactor attempts fail, ship the GREEN code — working beats perfect

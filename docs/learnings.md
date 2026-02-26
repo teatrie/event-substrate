@@ -190,6 +190,58 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 ---
 
+## 📂 Move-to-Permanent Storage Saga
+
+### 16. MinIO Webhook Targets Must Be Environment Variables, Not Runtime Config
+
+**Observation:** MinIO webhook notification *targets* (the endpoint URL and enable flag) must be defined via environment variables in `docker-compose.yml` (`MINIO_NOTIFY_WEBHOOK_ENABLE_<NAME>`, `MINIO_NOTIFY_WEBHOOK_ENDPOINT_<NAME>`). Attempting to create targets at runtime via `mc admin config set notify_webhook:<name> endpoint=...` silently fails — the config appears to set but MinIO doesn't register the target. Subsequent `mc event add` calls then fail with "A specified destination ARN does not exist or is not well-formed" because the ARN references a target that was never actually created.
+
+**Decision:** Define webhook targets exclusively as MinIO env vars in `docker-compose.yml`. The setup script (`setup-minio-webhook.sh`) should only add *bucket event notifications* (`mc event add` with ARN, event type, and prefix filter) — never attempt to create the targets themselves. Changing webhook targets requires recreating the MinIO container (`docker compose down` + `up`, not just `restart`) to pick up the new env vars.
+
+### 17. Prefix-Scoped Webhooks Enable Domain-Specific Event Routing
+
+**Observation:** A single MinIO bucket can have multiple named webhook targets, each scoped to a different key prefix via `mc event add --prefix`. This avoids needing a single webhook handler to demux events by path — each handler only receives events for its prefix.
+
+**Decision:** The `media-uploads` bucket uses two webhook targets: `MEDIASERVICE_UPLOADS` (prefix `uploads/` → `/webhooks/media-upload`) and `MEDIASERVICE_FILES` (prefix `files/` → `/webhooks/file-ready`). Each target has its own ARN (`arn:minio:sqs::<NAME>:webhook`), and each handler receives only the events it cares about. When adding new object lifecycle stages, add a new named webhook target + handler rather than overloading existing ones.
+
+### 18. Idempotent MoveObject: Check Destination Before Failing on Missing Source
+
+**Observation:** In a saga retry loop, `CopyObject` may fail with `NoSuchKey` if the source was already removed by a previous successful move attempt. Treating this as a hard error causes the retry to fail even though the move already completed.
+
+**Decision:** The `minioObjectMover` adapter handles `NoSuchKey` on `CopyObject` by checking if the destination already exists via `StatObject`. If the destination is present, the move already succeeded — return nil. This makes MoveObject safe for retries without requiring external state tracking. The pattern: `CopyObject → (NoSuchKey? → StatObject dest → exists? → nil) → RemoveObject src`.
+
+### 19. Saga Retry: Async First Attempt, Synchronous Retry
+
+**Observation:** The webhook handler fires MoveObject in a goroutine (fire-and-forget) and returns 200 immediately after producing the `upload.received` Kafka event. This is correct because the saga supervisor (Flink) will detect if the move failed and trigger a retry. However, the retry handler must call MoveObject *synchronously* — if it fired-and-forgot, it would re-produce `upload.received` before knowing if the move succeeded, potentially causing an infinite retry loop where the move never completes but keeps re-entering the saga.
+
+**Decision:** First attempt (webhook): async MoveObject — speed matters, saga is the safety net. Retries (retry handler): synchronous MoveObject — correctness matters, the retry IS the safety net. The retry handler only re-produces `upload.received` (re-entering the saga loop) after confirming MoveObject returned nil.
+
+### 20. TTL Expiry Must Key on Upload Receipt, Not Saga Completion
+
+**Observation:** The TTL processor detects "user got a presigned URL but never uploaded." The completion signal should be `upload.received` (file hit staging), not `upload.confirmed` (saga completed and file moved to permanent). If the move saga fails but the user DID upload the file, their credit should NOT be refunded — the file exists in staging, the saga will retry, and the upload will eventually complete.
+
+**Decision:** Changed TTL processor stream 2 from `public.media.upload.events` to `internal.media.upload.received`. The TTL timer cancels as soon as the file lands in staging, regardless of whether the move-to-permanent saga has completed. Credit refunds only happen when the user genuinely didn't upload within the TTL window.
+
+### 21. Saga Supervisors Need Three-Outcome Branching, Not Two
+
+**Observation:** A naive two-stream join (both present → success, missing → retry) creates an infinite retry loop. Without a retry count cap, transient failures (e.g., MinIO down) cause permanent event storms as the saga continuously retries.
+
+**Decision:** Every saga supervisor must have three outcomes: (1) success — both events present, (2) retry — timeout + retry_count < MAX, (3) dead letter — timeout + retry_count >= MAX. The `retry_count` is carried in the event payload and incremented by the retry handler, not the saga supervisor. The DLQ event auto-tiers to Iceberg via Redpanda's `redpanda.iceberg.mode` for post-mortem analysis, and triggers a user-facing `media.upload_failed` notification so the user knows to retry manually.
+
+### 22. PyFlink on_timer Context Does Not Support Side Outputs
+
+**Observation:** PyFlink 1.18's `KeyedCoProcessFunction.on_timer` receives an `InternalKeyedProcessFunctionOnTimerContext` that lacks the `.output()` method for side outputs. Calling `ctx.output(tag, row)` in `on_timer` raises `AttributeError`. This is a PyFlink-specific limitation — the Java API supports side outputs from all context types.
+
+**Decision:** Avoid side outputs entirely in PyFlink DataStream jobs. Instead, use a single wide output Row with a `_type` discriminator field. All event types (confirmed, retry, dead-letter) flow through the main output. Downstream SQL `WHERE _type = 'confirmed'` / `'retry'` / `'dead_letter'` routes events to the correct Kafka sinks. This is simpler, avoids the API gap, and reduces the number of distinct Row types to maintain.
+
+### 23. Fast-Path Saga Confirmation Avoids Unnecessary Timer Waits
+
+**Observation:** The saga supervisor originally only emitted results from `on_timer` (120s after `upload.received`). Even when both events arrived within milliseconds, the pipeline waited the full timeout before producing `upload.confirmed`. This made E2E tests (60s timeout) impossible and added unnecessary latency to the happy path.
+
+**Decision:** Check for both events in `process_element1` and `process_element2`. If both states are present when either event arrives, emit `confirmed` immediately and clear state. The timer still fires but finds empty state and becomes a no-op. This gives sub-second confirmation on the happy path while preserving the timeout/retry/DLQ behavior when `file.ready` never arrives.
+
+---
+
 ## 📦 Project Philosophy
 
 ### 1. The "Base Stack" Strategy

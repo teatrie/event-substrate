@@ -36,7 +36,7 @@ The API Gateway validates JWTs via shared `jwtKeyFunc` supporting HS256 (`SUPABA
 
 ## Media Service (go-services/media-service/)
 
-Dedicated Kafka consumer service owning MinIO presigned URLs, file metadata queries, and object lifecycle. Consumes 4 topics via a `TopicRouter`:
+Dedicated Kafka consumer + HTTP webhook service owning MinIO presigned URLs, file metadata queries, object lifecycle, and move-to-permanent storage. Consumes 5 Kafka topics via a `TopicRouter` and serves 2 MinIO webhook endpoints on HTTP :8090:
 
 **Upload Signing** (`upload_signing_handler.go`): Consumes `public.media.upload.approved` → generates presigned PUT URL → emits `FileUploadUrlSigned` to `public.media.upload.signed`. Uses `URLSigner` interface with `publicMinioClient` (browser-reachable URLs).
 
@@ -46,7 +46,15 @@ Dedicated Kafka consumer service owning MinIO presigned URLs, file metadata quer
 
 **Expired Cleanup** (`expired_cleanup_handler.go`): Consumes `public.media.expired.events` → best-effort MinIO `RemoveObject` (errors logged, not returned). MinIO 24h lifecycle policy is the backstop.
 
-**Key interfaces** (`interfaces.go`): `DownloadURLSigner`, `FileMetadataLookup` (returns `*FileMetadata, nil` for not-found), `ObjectRemover`, `FileDeleter`.
+**Upload Webhook** (`upload_webhook_handler.go`): HTTP handler at `/webhooks/media-upload` (port 8090). Receives MinIO `uploads/` prefix PUT events, produces `UploadReceived` to `internal.media.upload.received` with `permanent_path` and `retry_count=0`, triggers async `MoveObject` to `files/` prefix.
+
+**File-Ready Webhook** (`file_ready_webhook_handler.go`): HTTP handler at `/webhooks/file-ready` (port 8090). Receives MinIO `files/` prefix PUT events, produces `FileReady` to `internal.media.file.ready`.
+
+**Retry Handler** (`retry_handler.go`): Kafka consumer via TopicRouter for `internal.media.upload.retry`. Performs synchronous `MoveObject`, re-produces `UploadReceived` with `retry_count + 1` to re-enter the saga loop.
+
+**ObjectMover** (`interfaces.go` + `adapters.go`): `ObjectMover` interface with `minioObjectMover` adapter. Idempotent: `CopyObject` + `RemoveObject`, returns nil if source missing but destination exists.
+
+**Key interfaces** (`interfaces.go`): `DownloadURLSigner`, `FileMetadataLookup` (returns `*FileMetadata, nil` for not-found), `ObjectRemover`, `ObjectMover`, `FileDeleter`.
 
 **Adapters** (`adapters.go`): Concrete implementations: `minioURLSigner` (PUT + GET), `minioObjectRemover`, `dbFileStore` (implements both `FileMetadataLookup` and `FileDeleter`), `avroKafkaProducer` (Confluent wire format with schema registry caching).
 
