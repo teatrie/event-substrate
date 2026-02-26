@@ -1,0 +1,19 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "UploadDeadLetter",
+  "doc": "Emitted by the saga supervisor when retry_count >= MAX_RETRIES. Auto-tiered to Iceberg. Triggers user notification.",
+  "fields": [
+    {"name": "user_id", "type": "string", "doc": "The unique identifier of the uploading user."},
+    {"name": "email", "type": "string", "doc": "The email address of the uploading user."},
+    {"name": "file_path", "type": "string", "doc": "Object storage path in staging (e.g. uploads/<user_id>/<uuid>/<file_name>)."},
+    {"name": "permanent_path", "type": "string", "doc": "Target object storage path in permanent prefix (e.g. files/<user_id>/<uuid>/<file_name>)."},
+    {"name": "file_name", "type": "string", "doc": "Original file name as provided by the client."},
+    {"name": "file_size", "type": "long", "doc": "File size in bytes."},
+    {"name": "media_type", "type": "string", "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."},
+    {"name": "upload_time", "type": "string", "doc": "ISO 8601 timestamp of original upload."},
+    {"name": "retry_count", "type": "int", "doc": "Total number of retries attempted before dead-lettering."},
+    {"name": "failure_reason", "type": "string", "doc": "Human-readable reason for dead-lettering (e.g. 'max retries exceeded')."},
+    {"name": "dead_letter_time", "type": "string", "doc": "ISO 8601 timestamp of when this event was dead-lettered."}
+  ]
+}
