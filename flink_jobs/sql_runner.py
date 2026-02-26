@@ -8,7 +8,7 @@ from pyflink.table import StreamTableEnvironment, EnvironmentSettings
 ENV_DEFAULTS = {
     'REDPANDA_BROKERS': 'host.docker.internal:9092',
     'SCHEMA_REGISTRY_URL': 'http://host.docker.internal:8081',
-    'SUPABASE_DB_JDBC_URL': 'jdbc:postgresql://host.docker.internal:54322/postgres',
+    'SUPABASE_DB_JDBC_URL': 'jdbc:postgresql://host.docker.internal:54322/postgres?tcpKeepAlive=true&connectTimeout=10&socketTimeout=30',
     'SUPABASE_DB_USER': 'postgres',
     'SUPABASE_DB_PASSWORD': 'postgres',
     'ICEBERG_REST_CATALOG_ENDPOINT': 'http://host.docker.internal:19120/iceberg',
@@ -88,8 +88,8 @@ def register_kafka_sources(t_env):
             'fields': '`user_id` STRING, `email` STRING, `signout_time` STRING, `device_id` STRING, `user_agent` STRING, `ip_address` STRING',
         },
         'media_upload_events': {
-            'topic': 'public.media.upload.events',
-            'group_id': 'flink-media-consumer',
+            'topic': 'public.media.upload.confirmed',
+            'group_id': 'flink-media-confirmed-consumer',
             'fields': '`user_id` STRING, `email` STRING, `file_path` STRING, `file_name` STRING, `file_size` BIGINT, `media_type` STRING, `upload_time` STRING',
         },
         'media_expired_events': {
@@ -126,6 +126,11 @@ def register_kafka_sources(t_env):
             'topic': 'public.media.delete.rejected',
             'group_id': 'flink-delete-rejected-consumer',
             'fields': '`user_id` STRING, `file_path` STRING, `request_id` STRING, `reason` STRING, `rejected_time` STRING',
+        },
+        'upload_dead_letter_events': {
+            'topic': 'internal.media.upload.dead-letter',
+            'group_id': 'flink-dead-letter-consumer',
+            'fields': '`user_id` STRING, `email` STRING, `file_path` STRING, `permanent_path` STRING, `file_name` STRING, `file_size` BIGINT, `media_type` STRING, `upload_time` STRING, `retry_count` INT, `failure_reason` STRING, `dead_letter_time` STRING',
         },
     }
 
