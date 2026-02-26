@@ -30,6 +30,8 @@ graph TD
         DEI_Topic([internal.media.delete.intent]):::broker
         DE_Topic([public.media.delete.events]):::broker
         DER_Topic([public.media.delete.rejected]):::broker
+        DERetry_Topic([internal.media.delete.retry]):::broker
+        DEDLQ_Topic([internal.media.delete.dead-letter]):::broker
         SupabaseRT_Del[Supabase Realtime]:::stream
     end
 
@@ -57,14 +59,17 @@ graph TD
     DEI_Topic -->|consume| MediaService
     MediaService -->|"verify ownership"| MediaFiles
     MediaFiles -->|found| MediaService
-    MediaService -->|"remove object"| MediaBucket
-    MediaBucket -->|"object removed"| MediaService
-    MediaService -->|"soft-delete row\n(UPDATE status='deleted')"| MediaFiles
-    MediaService -->|"produce FileDeleted"| DE_Topic
+    MediaService -->|"1. soft-delete row\n(UPDATE status='deleted')"| MediaFiles
+    MediaService -->|"2. produce FileDeleted"| DE_Topic
+    MediaService -->|"3. remove object\n(best-effort)"| MediaBucket
+    MediaBucket -->|"RemoveObject fails"| MediaService
+    MediaService -->|"produce FileDeleteRetry\n(retry_count=0)"| DERetry_Topic
+    DERetry_Topic -->|"consume\n(DeleteRetryHandler)"| MediaService
+    MediaService -->|"retry_count >= 3\nproduce FileDeleteDeadLetter"| DEDLQ_Topic
     MediaFiles -->|"not found / error"| MediaService
     MediaService -->|"produce FileDeleteRejected"| DER_Topic
     DE_Topic -->|consume| FlinkMediaNotifs
     DER_Topic -->|consume| FlinkMediaNotifs
-    FlinkMediaNotifs -->|"media.delete_complete\nor media.delete_rejected"| UserNotifs
+    FlinkMediaNotifs -->|"media.file_deleted\nor media.delete_rejected"| UserNotifs
     UserNotifs -->|notify| SupabaseRT_Del
     SupabaseRT_Del -->|"deletion confirmed\n(RLS filters status='active')"| WebUI

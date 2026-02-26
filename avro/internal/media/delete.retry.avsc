@@ -1,0 +1,16 @@
+{
+  "namespace": "internal.media",
+  "type": "record",
+  "name": "FileDeleteRetry",
+  "doc": "Emitted by DeleteHandler when MinIO RemoveObject fails after DB soft-delete succeeds. Consumed by media-service DeleteRetryHandler for background storage cleanup.",
+  "fields": [
+    {"name": "user_id", "type": "string", "doc": "The unique identifier of the deleting user."},
+    {"name": "file_path", "type": "string", "doc": "Object storage path of the file to remove from MinIO."},
+    {"name": "file_name", "type": "string", "doc": "Original file name."},
+    {"name": "media_type", "type": "string", "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."},
+    {"name": "file_size", "type": "long", "doc": "File size in bytes."},
+    {"name": "request_id", "type": "string", "doc": "Correlation ID from the original delete intent."},
+    {"name": "retry_count", "type": "int", "doc": "Current retry count (incremented by retry handler on each failure)."},
+    {"name": "failed_at", "type": "string", "doc": "ISO 8601 timestamp of when this retry was triggered."}
+  ]
+}

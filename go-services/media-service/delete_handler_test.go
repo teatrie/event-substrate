@@ -303,24 +303,26 @@ func TestDeleteHandler_HappyPath_SoftDeleteCalled(t *testing.T) {
 	}
 }
 
-// TestDeleteHandler_HappyPath_OrderOfOperations verifies that RemoveObject is
-// called before SoftDelete (MinIO before DB soft-delete for safety).
+// TestDeleteHandler_HappyPath_OrderOfOperations verifies that SoftDelete runs
+// first, then FileDeleted is emitted, then RemoveObject runs last
+// (SoftDelete-first ordering for user-facing responsiveness).
 func TestDeleteHandler_HappyPath_OrderOfOperations(t *testing.T) {
 	callOrder := []string{}
 
 	remover := &mockObjectRemoverOrdered{onCall: func() { callOrder = append(callOrder, "remover") }}
 	deleter := &mockFileDeleterOrdered{onCall: func() { callOrder = append(callOrder, "deleter") }}
-	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, deleter, defaultProducer(), "media-uploads")
+	producer := &mockEventProducerOrdered{onCall: func() { callOrder = append(callOrder, "producer") }}
+	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, deleter, producer, "media-uploads")
 
 	if err := handler.Handle(context.Background(), validDeletePayload()); err != nil {
 		t.Fatalf("Handle() error: %v", err)
 	}
 
-	if len(callOrder) != 2 {
-		t.Fatalf("expected 2 operations, got %d: %v", len(callOrder), callOrder)
+	if len(callOrder) != 3 {
+		t.Fatalf("expected 3 operations, got %d: %v", len(callOrder), callOrder)
 	}
-	if callOrder[0] != "remover" || callOrder[1] != "deleter" {
-		t.Errorf("expected [remover, deleter] order, got %v", callOrder)
+	if callOrder[0] != "deleter" || callOrder[1] != "producer" || callOrder[2] != "remover" {
+		t.Errorf("expected [deleter, producer, remover] order, got %v", callOrder)
 	}
 }
 
@@ -339,6 +341,16 @@ type mockFileDeleterOrdered struct {
 }
 
 func (m *mockFileDeleterOrdered) SoftDelete(ctx context.Context, userID, filePath string) error {
+	m.onCall()
+	return nil
+}
+
+// mockEventProducerOrdered implements EventProducer for order-of-operations testing.
+type mockEventProducerOrdered struct {
+	onCall func()
+}
+
+func (m *mockEventProducerOrdered) Produce(ctx context.Context, topic string, event map[string]any) error {
 	m.onCall()
 	return nil
 }
@@ -579,69 +591,223 @@ func TestDeleteHandler_MetadataLookupError_NoOperationsCalled(t *testing.T) {
 	}
 }
 
-// TestDeleteHandler_RemoveObjectError_EmitsRejectedEvent verifies that when
-// RemoveObject fails, a FileDeleteRejected event is emitted (not returned as error).
-func TestDeleteHandler_RemoveObjectError_EmitsRejectedEvent(t *testing.T) {
+// TestDeleteHandler_RemoveObjectError_EmitsRetryEvent verifies that when
+// RemoveObject fails, a FileDeleteRetry event is emitted to the internal
+// retry topic (not a rejection -- the user already got FileDeleted).
+func TestDeleteHandler_RemoveObjectError_EmitsRetryEvent(t *testing.T) {
 	remover := &mockObjectRemover{err: errors.New("MinIO connection failed")}
 	producer := defaultProducer()
 	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, defaultFileDeleter(), producer, "media-uploads")
 
 	err := handler.Handle(context.Background(), validDeletePayload())
 	if err != nil {
-		t.Fatalf("Handle() returned error (expected rejection event): %v", err)
+		t.Fatalf("Handle() returned error (expected retry event, no error): %v", err)
 	}
 
-	if len(producer.calls) != 1 {
-		t.Fatalf("expected 1 Produce call (rejected event), got %d", len(producer.calls))
+	// The second Produce call should be the retry event.
+	if len(producer.calls) < 2 {
+		t.Fatalf("expected at least 2 Produce calls (FileDeleted + retry), got %d", len(producer.calls))
 	}
 
-	if producer.calls[0].topic != "public.media.delete.rejected" {
-		t.Errorf("expected rejection topic, got %q", producer.calls[0].topic)
+	retryCall := producer.calls[1]
+	if retryCall.topic != "internal.media.delete.retry" {
+		t.Errorf("expected retry topic 'internal.media.delete.retry', got %q", retryCall.topic)
 	}
 }
 
-// TestDeleteHandler_RemoveObjectError_ReasonIsInternalError verifies that when
-// RemoveObject fails, reason="internal_error" in the rejection event.
-func TestDeleteHandler_RemoveObjectError_ReasonIsInternalError(t *testing.T) {
+// TestDeleteHandler_RemoveObjectError_RetryEventHasZeroRetryCount verifies
+// that retry_count is int32(0) in the produced retry event.
+func TestDeleteHandler_RemoveObjectError_RetryEventHasZeroRetryCount(t *testing.T) {
 	remover := &mockObjectRemover{err: errors.New("S3 error")}
 	producer := defaultProducer()
 	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, defaultFileDeleter(), producer, "media-uploads")
 
 	_ = handler.Handle(context.Background(), validDeletePayload())
 
-	if len(producer.calls) == 0 {
-		t.Fatal("no events produced")
+	if len(producer.calls) < 2 {
+		t.Fatalf("expected at least 2 Produce calls, got %d", len(producer.calls))
 	}
 
-	reason, _ := producer.calls[0].event["reason"].(string)
-	if reason != "internal_error" {
-		t.Errorf("expected reason 'internal_error' on RemoveObject failure, got %q", reason)
+	retryEvent := producer.calls[1].event
+	retryCount, ok := retryEvent["retry_count"]
+	if !ok {
+		t.Fatal("retry event missing field 'retry_count'")
+	}
+	rc, isInt32 := retryCount.(int32)
+	if !isInt32 {
+		t.Fatalf("retry_count should be int32, got %T (%v)", retryCount, retryCount)
+	}
+	if rc != int32(0) {
+		t.Errorf("expected retry_count = 0, got %d", rc)
 	}
 }
 
-// TestDeleteHandler_RemoveObjectError_NoSoftDeleteCalled verifies that
-// SoftDelete is NOT called when RemoveObject fails.
-func TestDeleteHandler_RemoveObjectError_NoSoftDeleteCalled(t *testing.T) {
-	remover := &mockObjectRemover{err: errors.New("MinIO down")}
-	deleter := defaultFileDeleter()
+// TestDeleteHandler_RemoveObjectError_FileDeletedStillEmitted verifies that
+// when RemoveObject fails, TWO events are produced: first FileDeleted on
+// "public.media.delete.events", then FileDeleteRetry on "internal.media.delete.retry".
+func TestDeleteHandler_RemoveObjectError_FileDeletedStillEmitted(t *testing.T) {
+	remover := &mockObjectRemover{err: errors.New("MinIO unreachable")}
+	producer := defaultProducer()
+	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, defaultFileDeleter(), producer, "media-uploads")
+
+	err := handler.Handle(context.Background(), validDeletePayload())
+	if err != nil {
+		t.Fatalf("Handle() returned error: %v", err)
+	}
+
+	if len(producer.calls) != 2 {
+		t.Fatalf("expected exactly 2 Produce calls, got %d", len(producer.calls))
+	}
+
+	if producer.calls[0].topic != "public.media.delete.events" {
+		t.Errorf("expected first event topic 'public.media.delete.events', got %q", producer.calls[0].topic)
+	}
+	if producer.calls[1].topic != "internal.media.delete.retry" {
+		t.Errorf("expected second event topic 'internal.media.delete.retry', got %q", producer.calls[1].topic)
+	}
+}
+
+// TestDeleteHandler_RemoveObjectError_RetryEventPreservesMetadata verifies
+// that the retry event (second Produce call) contains user_id, file_path,
+// file_name, media_type, file_size, and request_id from the original
+// payload/metadata.
+func TestDeleteHandler_RemoveObjectError_RetryEventPreservesMetadata(t *testing.T) {
+	lookup := &mockFileMetadataLookup{
+		metadata: &FileMetadata{
+			FileName:  "vacation.mp4",
+			MediaType: "video/mp4",
+			FileSize:  int64(50000000),
+		},
+	}
+	remover := &mockObjectRemover{err: errors.New("MinIO timeout")}
+	producer := defaultProducer()
+	handler := NewDeleteHandler(lookup, remover, defaultFileDeleter(), producer, "media-uploads")
+
+	payload := validDeletePayload()
+	payload["user_id"] = "user-retry-meta"
+	payload["file_path"] = "uploads/user-retry-meta/uuid-111/vacation.mp4"
+	payload["request_id"] = "req-retry-meta-001"
+
+	err := handler.Handle(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("Handle() returned error: %v", err)
+	}
+
+	if len(producer.calls) < 2 {
+		t.Fatalf("expected at least 2 Produce calls, got %d", len(producer.calls))
+	}
+
+	retryEvent := producer.calls[1].event
+
+	checks := map[string]string{
+		"user_id":    "user-retry-meta",
+		"file_path":  "uploads/user-retry-meta/uuid-111/vacation.mp4",
+		"file_name":  "vacation.mp4",
+		"media_type": "video/mp4",
+		"request_id": "req-retry-meta-001",
+	}
+
+	for field, expected := range checks {
+		val, ok := retryEvent[field]
+		if !ok {
+			t.Errorf("retry event missing field %q", field)
+			continue
+		}
+		str, isStr := val.(string)
+		if !isStr {
+			t.Errorf("retry event field %q is not a string: %T", field, val)
+			continue
+		}
+		if str != expected {
+			t.Errorf("retry event field %q: expected %q, got %q", field, expected, str)
+		}
+	}
+
+	fileSize, ok := retryEvent["file_size"]
+	if !ok {
+		t.Error("retry event missing field 'file_size'")
+	} else if fs, isInt64 := fileSize.(int64); !isInt64 {
+		t.Errorf("retry event file_size should be int64, got %T", fileSize)
+	} else if fs != int64(50000000) {
+		t.Errorf("retry event file_size: expected 50000000, got %d", fs)
+	}
+}
+
+// TestDeleteHandler_RemoveObjectError_RetryEventHasFailedAt verifies that the
+// retry event has a valid ISO 8601 failed_at timestamp.
+func TestDeleteHandler_RemoveObjectError_RetryEventHasFailedAt(t *testing.T) {
+	remover := &mockObjectRemover{err: errors.New("MinIO 503")}
+	producer := defaultProducer()
+	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, defaultFileDeleter(), producer, "media-uploads")
+
+	err := handler.Handle(context.Background(), validDeletePayload())
+	if err != nil {
+		t.Fatalf("Handle() returned error: %v", err)
+	}
+
+	if len(producer.calls) < 2 {
+		t.Fatalf("expected at least 2 Produce calls, got %d", len(producer.calls))
+	}
+
+	retryEvent := producer.calls[1].event
+	failedAt, ok := retryEvent["failed_at"]
+	if !ok {
+		t.Fatal("retry event missing field 'failed_at'")
+	}
+
+	failedAtStr, isStr := failedAt.(string)
+	if !isStr || failedAtStr == "" {
+		t.Fatalf("failed_at should be a non-empty string, got %T: %v", failedAt, failedAt)
+	}
+
+	_, err = time.Parse(time.RFC3339, failedAtStr)
+	if err != nil {
+		_, err = time.Parse(time.RFC3339Nano, failedAtStr)
+		if err != nil {
+			t.Errorf("failed_at %q is not a valid ISO 8601 timestamp: %v", failedAtStr, err)
+		}
+	}
+}
+
+// TestDeleteHandler_SoftDeleteError_EmitsRejectedEvent verifies that when
+// SoftDelete fails, the handler does NOT return an error -- it emits a
+// FileDeleteRejected event with reason="internal_error" to the rejected topic.
+func TestDeleteHandler_SoftDeleteError_EmitsRejectedEvent(t *testing.T) {
+	deleter := &mockFileDeleter{err: errors.New("DB update failed")}
+	producer := defaultProducer()
+	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), defaultObjectRemover(), deleter, producer, "media-uploads")
+
+	err := handler.Handle(context.Background(), validDeletePayload())
+	if err != nil {
+		t.Fatalf("Handle() returned error (expected rejected event, no error): %v", err)
+	}
+
+	if len(producer.calls) == 0 {
+		t.Fatal("expected at least 1 Produce call (rejected event), got 0")
+	}
+
+	rejectedCall := producer.calls[0]
+	if rejectedCall.topic != "public.media.delete.rejected" {
+		t.Errorf("expected rejected topic 'public.media.delete.rejected', got %q", rejectedCall.topic)
+	}
+
+	reason, _ := rejectedCall.event["reason"].(string)
+	if reason != "internal_error" {
+		t.Errorf("expected reason 'internal_error' on SoftDelete failure, got %q", reason)
+	}
+}
+
+// TestDeleteHandler_SoftDeleteError_NoRemoveObjectCalled verifies that when
+// SoftDelete fails, RemoveObject is NOT called (we do not touch MinIO if DB fails).
+func TestDeleteHandler_SoftDeleteError_NoRemoveObjectCalled(t *testing.T) {
+	deleter := &mockFileDeleter{err: errors.New("DB connection lost")}
+	remover := defaultObjectRemover()
 	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), remover, deleter, defaultProducer(), "media-uploads")
 
 	_ = handler.Handle(context.Background(), validDeletePayload())
 
-	if deleter.callCount > 0 {
-		t.Errorf("expected SoftDelete NOT called when RemoveObject fails, got %d calls", deleter.callCount)
-	}
-}
-
-// TestDeleteHandler_SoftDeleteError_ReturnsError verifies that when SoftDelete
-// fails, the handler returns an error.
-func TestDeleteHandler_SoftDeleteError_ReturnsError(t *testing.T) {
-	deleter := &mockFileDeleter{err: errors.New("DB update failed")}
-	handler := NewDeleteHandler(defaultDeleteMetadataLookup(), defaultObjectRemover(), deleter, defaultProducer(), "media-uploads")
-
-	err := handler.Handle(context.Background(), validDeletePayload())
-	if err == nil {
-		t.Error("expected error when SoftDelete fails, got nil")
+	if remover.callCount > 0 {
+		t.Errorf("expected RemoveObject NOT called when SoftDelete fails, got %d calls", remover.callCount)
 	}
 }
 
