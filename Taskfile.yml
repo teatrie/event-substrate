@@ -146,7 +146,8 @@ tasks:
           public.media.upload.rejected-value \
           public.media.download.rejected-value \
           public.media.upload.confirmed-value \
-          internal.media.upload.dead-letter-value; do
+          internal.media.upload.dead-letter-value \
+          internal.media.delete.dead-letter-value; do
           curl -s -o /dev/null -X PUT \
             "http://localhost:8081/config/${subject}" \
             -H "Content-Type: application/json" \
