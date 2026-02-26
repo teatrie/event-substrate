@@ -43,6 +43,10 @@ tests/browser/test-results/
 
 # Go compiled binaries
 go-services/api-gateway/api-gateway
+go-services/media-service/media-service
+
+# Go dependency checksums (large, not useful for context)
+go.sum
 
 # 5. Media & Test Uploads
 # Prevent Claude from trying to read raw video/audio files 

@@ -9,6 +9,7 @@ node_modules/
 # Go
 bin/
 go-services/api-gateway/api-gateway
+go-services/media-service/media-service
 api-gateway-test
 
 # Python
@@ -45,6 +46,7 @@ tests/browser/test-results/
 .claude/history/
 .claude/state/
 .claude/messages/
+.claude/projects/
 
 # AI TDD lockfiles
 .tdd-active
