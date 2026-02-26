@@ -25,6 +25,10 @@ echo ""
 # Clean up stale test data from previous failed runs
 node cleanup_stale.mjs
 
+# Wait for Flink pipeline to be ready (canary signup with 3-min timeout)
+node warmup.mjs
+echo ""
+
 TESTS=(
   test_signup_flow.mjs
   test_login_flow.mjs
@@ -34,6 +38,8 @@ TESTS=(
   test_credit_economy.mjs
   test_media_upload.mjs
   test_media_download_delete.mjs
+  test_upload_saga.mjs
+  test_download_delete_saga.mjs
 )
 
 PASSED=0
