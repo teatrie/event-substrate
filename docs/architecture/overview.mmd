@@ -23,17 +23,19 @@ graph TD
     subgraph APIGateway["API Gateway (Go)"]
         API["api-gateway"]:::gateway
         GoConsumers["message-consumer\nmedia-service"]:::mediaservice
+        MediaHTTP["media-service\nHTTP :8090"]:::mediaservice
     end
 
     subgraph MessageBroker["Message Broker (Redpanda)"]
         PublicTopics("public.* topics\n(identity, user, media)"):::broker
-        InternalTopics("internal.* topics\n(unified, intents)"):::broker
+        InternalTopics("internal.* topics\n(unified, intents, saga)"):::broker
         SchemaReg["Schema Registry"]:::registry
     end
 
     subgraph StreamProcessing["Stream Processing (Flink)"]
         IdentityMsg["Identity & Message\nProcessors"]:::stream
         MediaSaga["Upload Saga\n(Credit Check + TTL)"]:::stream
+        MoveSaga["Move Saga\n(PyFlink DataStream)"]:::stream
         UnifiedProc["Unified Events\nProcessor"]:::stream
     end
 
@@ -75,6 +77,11 @@ graph TD
     Nessie --> MinIO
 
     WebUI -->|"Presigned PUT/GET"| MinIO
+    MinIO -->|"S3 webhooks"| MediaHTTP
+    MediaHTTP -->|"Produce"| InternalTopics
+    InternalTopics --> MoveSaga
+    MoveSaga -->|"Produce"| PublicTopics
+    MoveSaga -->|"Produce"| InternalTopics
 
     API -.->|"OTLP"| OTel
     IdentityMsg -.->|"StatsD"| OTel
