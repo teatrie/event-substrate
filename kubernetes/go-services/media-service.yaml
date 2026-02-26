@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-service
+  namespace: go-microservices
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: media-service
+  template:
+    metadata:
+      labels:
+        app: media-service
+    spec:
+      containers:
+      - name: media-service
+        image: event-substrate-media-service:latest
+        imagePullPolicy: Never
+        env:
+        - name: REDPANDA_BROKERS
+          value: "host.docker.internal:9092"
+        - name: SCHEMA_REGISTRY_URL
+          value: "http://host.docker.internal:8081"
+        - name: SUPABASE_DB_URL
+          value: "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+        - name: MINIO_ENDPOINT
+          value: "host.docker.internal:9000"
+        - name: MINIO_PUBLIC_ENDPOINT
+          value: "host.docker.internal:9000"
+        - name: MINIO_ACCESS_KEY
+          value: "admin"
+        - name: MINIO_SECRET_KEY
+          value: "password"
+        - name: MINIO_BUCKET
+          value: "media-uploads"
+        - name: KAFKA_SASL_MECHANISM
+          value: "SCRAM-SHA-256"
+        - name: KAFKA_SASL_USERNAME
+          value: "media-service"
+        - name: KAFKA_SASL_PASSWORD
+          value: "media-service-local-pw"
+        - name: UPLOAD_URL_EXPIRY
+          value: "900"
+        - name: DOWNLOAD_URL_EXPIRY
+          value: "3600"

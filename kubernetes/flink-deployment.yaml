@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   image: pyflink-custom:1.18.0
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Never
   flinkVersion: v1_18
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "2"
@@ -86,6 +86,6 @@ spec:
   job:
     jarURI: local:///opt/flink/opt/flink-python_2.12-1.18.0.jar
     entryClass: "org.apache.flink.client.python.PythonGatewayServer"
-    args: ["-py", "/opt/flink/sql-scripts/sql_runner.py", "/opt/flink/sql-scripts/login_events_processor.sql", "/opt/flink/sql-scripts/signup_events_processor.sql", "/opt/flink/sql-scripts/signout_events_processor.sql", "/opt/flink/sql-scripts/unified_events_processor.sql", "/opt/flink/sql-scripts/credit_balance_processor.sql"]
+    args: ["-py", "/opt/flink/sql-scripts/sql_runner.py", "/opt/flink/sql-scripts/login_events_processor.sql", "/opt/flink/sql-scripts/signup_events_processor.sql", "/opt/flink/sql-scripts/signout_events_processor.sql", "/opt/flink/sql-scripts/unified_events_processor.sql", "/opt/flink/sql-scripts/credit_balance_processor.sql", "/opt/flink/sql-scripts/media_notification_processor.sql"]
     parallelism: 1
     upgradeMode: stateless

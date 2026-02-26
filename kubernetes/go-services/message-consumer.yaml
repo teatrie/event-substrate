@@ -16,7 +16,7 @@ spec:
       containers:
       - name: message-consumer
         image: event-substrate-message-consumer:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         env:
         - name: REDPANDA_BROKERS
           value: "host.docker.internal:9092"

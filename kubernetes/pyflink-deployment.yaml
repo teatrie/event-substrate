@@ -5,7 +5,7 @@ metadata:
 spec:
   # Using the official PyFlink image
   image: pyflink-custom:1.18.0
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Never
   flinkVersion: v1_18
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "2"

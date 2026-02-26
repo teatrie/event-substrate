@@ -47,12 +47,12 @@ docker exec minio mc admin service restart ${MINIO_ALIAS} 2>/dev/null || true
 sleep 3
 
 # Set up bucket event notification for ObjectCreated events
-docker exec minio mc event add ${MINIO_ALIAS}/${BUCKET} arn:minio:sqs::gateway:webhook \
+docker exec minio mc event add ${MINIO_ALIAS}/${BUCKET} arn:minio:sqs::GATEWAY:webhook \
   --event put \
-  --suffix "" 2>/dev/null || {
+  --suffix "" || {
     echo "Failed to add event notification. Trying alternative approach..."
     # Alternative: use MinIO client event add with just the ARN
-    docker exec minio mc event add ${MINIO_ALIAS}/${BUCKET} arn:minio:sqs::gateway:webhook --event put 2>/dev/null || true
+    docker exec minio mc event add ${MINIO_ALIAS}/${BUCKET} arn:minio:sqs::GATEWAY:webhook --event put || true
 }
 
 echo "MinIO webhook notification configured."
@@ -60,7 +60,13 @@ echo "  Bucket: ${BUCKET}"
 echo "  Events: s3:ObjectCreated:Put"
 echo "  Target: ${WEBHOOK_ENDPOINT}"
 
-# Verify configuration
+# Verify bucket event notifications are registered
 echo ""
-echo "Current event notifications for ${BUCKET}:"
-docker exec minio mc event list ${MINIO_ALIAS}/${BUCKET} 2>/dev/null || echo "  (unable to list events)"
+echo "Verifying bucket event notifications..."
+EVENTS=$(docker exec minio mc event list ${MINIO_ALIAS}/${BUCKET} 2>&1)
+if [ -z "$EVENTS" ]; then
+  echo "ERROR: No bucket event notifications registered!"
+  exit 1
+fi
+echo "Bucket events registered:"
+echo "$EVENTS"

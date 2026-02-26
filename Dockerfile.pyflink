@@ -8,5 +8,5 @@ RUN apt-get update -y && \
 # Set Python 3 as default
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-# Install PyFlink library
-RUN JAVA_HOME=/usr/lib/jvm/default-java pip3 install apache-flink==1.18.0
+# Install PyFlink library and psycopg2 (for credit check processor JDBC calls)
+RUN JAVA_HOME=/usr/lib/jvm/default-java pip3 install apache-flink==1.18.0 psycopg2-binary==2.9.9

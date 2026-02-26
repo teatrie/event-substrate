@@ -45,5 +45,9 @@ curl -sf -X PUT "http://minio:9000/media-uploads/?cors" \
   -H "Authorization: AWS admin:${SIG}" \
   -d @/tmp/cors.xml && echo "  ✅ CORS applied to media-uploads" || echo "  ⚠️  CORS config failed (non-fatal)"
 
+# Lifecycle policy: auto-expire uploads/ prefix after 1 day (backstop for TTL saga)
+mc ilm rule add myminio/media-uploads --prefix "uploads/" --expire-days 1 || true
+echo "  ✅ Lifecycle policy: uploads/ expire after 1 day"
+
 echo "MinIO init complete: buckets [redpanda, media-uploads] created"
 exit 0
