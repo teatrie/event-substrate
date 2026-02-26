@@ -3,7 +3,7 @@ TTL Expiry Processor — PyFlink DataStream Job (D8)
 
 Consumes TWO streams keyed by file_path:
   - public.media.upload.signed  (stream 1) — presigned URL generated
-  - public.media.upload.events  (stream 2) — upload completed
+  - internal.media.upload.received  (stream 2) — upload detected in staging
 
 When a signed event arrives a processing-time timer is registered for
 TTL seconds in the future. On timer fire:
@@ -64,11 +64,11 @@ def build_kafka_props() -> str:
 
 class TTLExpiryFunction:
     """
-    Keyed co-process function: upload.signed (stream 1) + upload.events (stream 2).
+    Keyed co-process function: upload.signed (stream 1) + upload.received (stream 2).
 
     State per file_path key:
       _signed_state    — JSON-serialised upload.signed event dict
-      _completed_state — bool flag, True once upload.events seen for this key
+      _completed_state — bool flag, True once upload.received seen for this key
 
     On timer:
       completed=True  → clear state, yield nothing
@@ -112,7 +112,7 @@ class TTLExpiryFunction:
         )
 
     def process_element2(self, value: dict, ctx) -> None:
-        """Handle upload.events: mark upload as completed for this file_path."""
+        """Handle upload.received: mark upload as completed for this file_path."""
         file_path = value.get("file_path", "")
         self._completed_state.update(True)
         logger.debug("Upload completed for file_path=%s — timer disarmed", file_path)
@@ -195,17 +195,19 @@ def run_ttl_expiry_job():
 
     t_env.execute_sql(f"""
         CREATE TABLE upload_events_source (
-            `user_id`     STRING,
-            `email`       STRING,
-            `file_path`   STRING,
-            `file_name`   STRING,
-            `file_size`   BIGINT,
-            `media_type`  STRING,
-            `upload_time` STRING
+            `user_id`        STRING,
+            `email`          STRING,
+            `file_path`      STRING,
+            `file_name`      STRING,
+            `file_size`      BIGINT,
+            `media_type`     STRING,
+            `upload_time`    STRING,
+            `permanent_path` STRING,
+            `retry_count`    INT
         ) WITH (
             {kafka_props},
-            'topic' = 'public.media.upload.events',
-            'properties.group.id' = 'flink-ttl-expiry-completed',
+            'topic' = 'internal.media.upload.received',
+            'properties.group.id' = 'flink-ttl-expiry-received',
             'scan.startup.mode' = 'earliest-offset'
         )
     """)
@@ -252,7 +254,7 @@ def run_ttl_expiry_job():
         def open(self, ctx):
             self._inner.open(ctx)
 
-        def process_element1(self, value, ctx, out):
+        def process_element1(self, value, ctx):
             row_dict = {
                 "user_id": value[0],
                 "file_path": value[1],
@@ -264,23 +266,21 @@ def run_ttl_expiry_job():
             }
             self._inner.process_element1(row_dict, ctx)
 
-        def process_element2(self, value, ctx, out):
+        def process_element2(self, value, ctx):
             row_dict = {"user_id": value[0], "file_path": value[2]}
             self._inner.process_element2(row_dict, ctx)
 
-        def on_timer(self, timestamp, ctx, out):
+        def on_timer(self, timestamp, ctx):
             for expired in self._inner.on_timer(timestamp, ctx):
-                out.collect(
-                    Row(
-                        expired["user_id"],
-                        expired["file_path"],
-                        expired["file_name"],
-                        expired["file_size"],
-                        expired["media_type"],
-                        expired["request_id"],
-                        expired["request_time"],
-                        expired["expired_time"],
-                    )
+                yield Row(
+                    expired["user_id"],
+                    expired["file_path"],
+                    expired["file_name"],
+                    expired["file_size"],
+                    expired["media_type"],
+                    expired["request_id"],
+                    expired["request_time"],
+                    expired["expired_time"],
                 )
 
     result_stream = keyed_signed.connect(keyed_events).process(

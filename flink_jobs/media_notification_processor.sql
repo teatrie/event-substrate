@@ -3,7 +3,7 @@
 -- Kafka source tables registered centrally by sql_runner.py:
 --   upload_signed_events, upload_rejected_events, media_upload_events,
 --   media_expired_events, download_signed_events, download_rejected_events,
---   media_delete_events, delete_rejected_events
+--   media_delete_events, delete_rejected_events, upload_dead_letter_events
 
 -- 1. Notification Sink (shared with credit_balance_processor — same table, different processor)
 CREATE TABLE media_notification_sink (
@@ -127,3 +127,16 @@ SELECT
   ),
   rejected_time
 FROM delete_rejected_events;
+
+-- 10. Upload failed notification (dead-lettered after max retries)
+INSERT INTO media_notification_sink
+SELECT
+  user_id,
+  'media.upload_failed',
+  JSON_OBJECT(
+    'file_name' VALUE file_name,
+    'failure_reason' VALUE failure_reason,
+    'retry_count' VALUE retry_count
+  ),
+  dead_letter_time
+FROM upload_dead_letter_events;
