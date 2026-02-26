@@ -479,6 +479,12 @@ func main() {
 		log.Println("WARNING: Media handlers not initialized — /api/v1/media/* will be unavailable")
 	}
 
+	// Wire async media intent endpoints (Upload Saga)
+	intentHandler := &IntentHandler{ProduceEvent: produceEventDirect}
+	mux.Handle("/api/v1/media/upload-intent", intentHandler)
+	mux.Handle("/api/v1/media/download-intent", intentHandler)
+	mux.Handle("/api/v1/media/delete-intent", intentHandler)
+
 	server := &http.Server{Addr: ":8080", Handler: corsMiddleware(mux)}
 
 	go func() {
