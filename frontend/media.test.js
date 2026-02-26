@@ -9,6 +9,10 @@ import {
   InsufficientCreditsError,
   requestDownloadUrl,
   deleteFile,
+  requestUploadIntent,
+  requestDownloadIntent,
+  requestDeleteIntent,
+  createNotificationWaiter,
 } from './media.js'
 
 // ---------------------------------------------------------------------------
@@ -805,5 +809,374 @@ describe('deleteFile', () => {
 
     const calledUrl = globalThis.fetch.mock.calls[0][0]
     expect(calledUrl).not.toContain('//api')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// requestUploadIntent
+// ---------------------------------------------------------------------------
+describe('requestUploadIntent', () => {
+  const apiGatewayUrl = 'http://localhost:8080'
+  const token = 'test-jwt-token'
+  const fileMetadata = {
+    file_name: 'photo.jpg',
+    media_type: 'image/jpeg',
+    file_size: 204800,
+  }
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends POST to /api/v1/media/upload-intent with auth header and JSON body', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-abc-123' }),
+    })
+
+    await requestUploadIntent(apiGatewayUrl, token, fileMetadata)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/media/upload-intent',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-jwt-token',
+        }),
+        body: JSON.stringify(fileMetadata),
+      }),
+    )
+  })
+
+  it('returns parsed JSON with request_id on 202', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-abc-123' }),
+    })
+
+    const result = await requestUploadIntent(apiGatewayUrl, token, fileMetadata)
+
+    expect(result).toEqual({ request_id: 'req-abc-123' })
+    expect(result).toHaveProperty('request_id')
+  })
+
+  it('throws InsufficientCreditsError on 402', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 402,
+      text: async () => 'Payment Required',
+    })
+
+    await expect(
+      requestUploadIntent(apiGatewayUrl, token, fileMetadata),
+    ).rejects.toThrow(InsufficientCreditsError)
+  })
+
+  it('throws on 500 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    })
+
+    await expect(
+      requestUploadIntent(apiGatewayUrl, token, fileMetadata),
+    ).rejects.toThrow()
+  })
+
+  it('throws on 200 status (intent endpoint must return 202)', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ upload_url: 'https://storage.example.com' }),
+    })
+
+    await expect(
+      requestUploadIntent(apiGatewayUrl, token, fileMetadata),
+    ).rejects.toThrow()
+  })
+
+  it('handles apiGatewayUrl with trailing slash', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-xyz' }),
+    })
+
+    await requestUploadIntent('http://gateway:9090/', token, fileMetadata)
+
+    const calledUrl = globalThis.fetch.mock.calls[0][0]
+    expect(calledUrl).not.toContain('//api')
+    expect(calledUrl).toBe('http://gateway:9090/api/v1/media/upload-intent')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// requestDownloadIntent
+// ---------------------------------------------------------------------------
+describe('requestDownloadIntent', () => {
+  const apiGatewayUrl = 'http://localhost:8080'
+  const token = 'test-jwt-token'
+  const filePath = 'uploads/photo.jpg'
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends POST to /api/v1/media/download-intent with auth header', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-dl-123' }),
+    })
+
+    await requestDownloadIntent(apiGatewayUrl, token, filePath)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/media/download-intent',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-jwt-token',
+        }),
+        body: JSON.stringify({ file_path: filePath }),
+      }),
+    )
+  })
+
+  it('returns parsed JSON with request_id on 202', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-dl-123' }),
+    })
+
+    const result = await requestDownloadIntent(apiGatewayUrl, token, filePath)
+
+    expect(result).toHaveProperty('request_id', 'req-dl-123')
+  })
+
+  it('throws on non-202 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => 'Not Found',
+    })
+
+    await expect(
+      requestDownloadIntent(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('throws on 200 status (intent endpoint must return 202)', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ download_url: 'https://storage.example.com' }),
+    })
+
+    await expect(
+      requestDownloadIntent(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// requestDeleteIntent
+// ---------------------------------------------------------------------------
+describe('requestDeleteIntent', () => {
+  const apiGatewayUrl = 'http://localhost:8080'
+  const token = 'test-jwt-token'
+  const filePath = 'uploads/photo.jpg'
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends POST to /api/v1/media/delete-intent with auth header', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-del-123' }),
+    })
+
+    await requestDeleteIntent(apiGatewayUrl, token, filePath)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/media/delete-intent',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-jwt-token',
+        }),
+        body: JSON.stringify({ file_path: filePath }),
+      }),
+    )
+  })
+
+  it('returns parsed JSON with request_id on 202', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ request_id: 'req-del-123' }),
+    })
+
+    const result = await requestDeleteIntent(apiGatewayUrl, token, filePath)
+
+    expect(result).toHaveProperty('request_id', 'req-del-123')
+  })
+
+  it('throws on non-202 status', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    })
+
+    await expect(
+      requestDeleteIntent(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+
+  it('throws on 200 status (intent endpoint must return 202)', async () => {
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    })
+
+    await expect(
+      requestDeleteIntent(apiGatewayUrl, token, filePath),
+    ).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createNotificationWaiter
+// ---------------------------------------------------------------------------
+describe('createNotificationWaiter', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('resolves waitFor when handleNotification delivers a matching notification', async () => {
+    const waiter = createNotificationWaiter()
+    const notification = {
+      request_id: 'req-123',
+      event_type: 'media.upload_ready',
+      payload: JSON.stringify({ upload_url: 'https://storage.example.com' }),
+    }
+
+    const promise = waiter.waitFor('req-123', ['media.upload_ready', 'media.upload_rejected'], 5000)
+    waiter.handleNotification(notification)
+
+    const result = await promise
+    expect(result).toEqual(notification)
+  })
+
+  it('resolves with rejection notification when event_type is in expected set', async () => {
+    const waiter = createNotificationWaiter()
+    const rejectionNotification = {
+      request_id: 'req-456',
+      event_type: 'media.upload_rejected',
+      payload: JSON.stringify({ reason: 'Insufficient credits' }),
+    }
+
+    const promise = waiter.waitFor('req-456', ['media.upload_ready', 'media.upload_rejected'], 5000)
+    waiter.handleNotification(rejectionNotification)
+
+    const result = await promise
+    expect(result).toEqual(rejectionNotification)
+  })
+
+  it('does not resolve when event_type does not match expected set', async () => {
+    vi.useFakeTimers()
+    const waiter = createNotificationWaiter()
+    const wrongTypeNotification = {
+      request_id: 'req-789',
+      event_type: 'media.download_ready',
+      payload: JSON.stringify({}),
+    }
+
+    const promise = waiter.waitFor('req-789', ['media.upload_ready', 'media.upload_rejected'], 1000)
+    waiter.handleNotification(wrongTypeNotification)
+    vi.advanceTimersByTime(1001)
+
+    await expect(promise).rejects.toThrow()
+  })
+
+  it('rejects on timeout when no matching notification arrives', async () => {
+    vi.useFakeTimers()
+    const waiter = createNotificationWaiter()
+
+    const promise = waiter.waitFor('req-timeout', ['media.upload_ready'], 1000)
+    vi.advanceTimersByTime(1001)
+
+    await expect(promise).rejects.toThrow()
+  })
+
+  it('handles multiple concurrent waiters independently', async () => {
+    const waiter = createNotificationWaiter()
+    const n1 = { request_id: 'req-a', event_type: 'media.upload_ready', payload: '{}' }
+    const n2 = { request_id: 'req-b', event_type: 'media.download_ready', payload: '{}' }
+
+    const p1 = waiter.waitFor('req-a', ['media.upload_ready'], 5000)
+    const p2 = waiter.waitFor('req-b', ['media.download_ready'], 5000)
+
+    waiter.handleNotification(n1)
+    waiter.handleNotification(n2)
+
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1).toEqual(n1)
+    expect(r2).toEqual(n2)
+  })
+
+  it('ignores notifications with a non-matching request_id', async () => {
+    vi.useFakeTimers()
+    const waiter = createNotificationWaiter()
+    const wrongIdNotification = {
+      request_id: 'req-different',
+      event_type: 'media.upload_ready',
+      payload: '{}',
+    }
+
+    const promise = waiter.waitFor('req-correct', ['media.upload_ready'], 1000)
+    waiter.handleNotification(wrongIdNotification)
+    vi.advanceTimersByTime(1001)
+
+    await expect(promise).rejects.toThrow()
+  })
+
+  it('cleanup rejects all pending waiters', async () => {
+    const waiter = createNotificationWaiter()
+
+    const promise = waiter.waitFor('req-cleanup', ['media.upload_ready'], 5000)
+    waiter.cleanup()
+
+    await expect(promise).rejects.toThrow()
+  })
+
+  it('handleNotification is a no-op when no waiters are pending', () => {
+    const waiter = createNotificationWaiter()
+    expect(() => {
+      waiter.handleNotification({ request_id: 'req-none', event_type: 'media.upload_ready', payload: '{}' })
+    }).not.toThrow()
   })
 })

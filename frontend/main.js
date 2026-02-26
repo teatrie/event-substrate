@@ -1,6 +1,6 @@
 import './style.css'
 import { createClient } from '@supabase/supabase-js'
-import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError, requestDownloadUrl, deleteFile } from './media.js'
+import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError, requestDownloadUrl, deleteFile, requestUploadIntent, requestDownloadIntent, requestDeleteIntent, createNotificationWaiter } from './media.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -11,6 +11,8 @@ if (!supabaseAnonKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+const notificationWaiter = createNotificationWaiter()
 
 // DOM Elements
 const authView = document.getElementById('auth-view')
@@ -241,7 +243,7 @@ uploadForm.addEventListener('submit', async (e) => {
 
     uploadBtn.disabled = true
     uploadBtn.textContent = 'Uploading…'
-    uploadStatus.textContent = 'Requesting upload URL…'
+    uploadStatus.textContent = 'Checking credits…'
     uploadStatus.className = 'upload-status'
 
     try {
@@ -254,8 +256,20 @@ uploadForm.addEventListener('submit', async (e) => {
             file_size: selectedFile.size
         }
 
-        const { upload_url } = await requestUploadUrl(apiGatewayUrl, session.access_token, metadata)
+        const { request_id } = await requestUploadIntent(apiGatewayUrl, session.access_token, metadata)
 
+        const notification = await notificationWaiter.waitFor(
+            request_id,
+            ['media.upload_ready', 'media.upload_rejected'],
+            30000,
+        )
+
+        if (notification.event_type === 'media.upload_rejected') {
+            const data = JSON.parse(notification.payload || '{}')
+            throw new Error(data.reason || 'Upload rejected')
+        }
+
+        const { upload_url } = JSON.parse(notification.payload || '{}')
         uploadStatus.textContent = 'Uploading file…'
         await uploadFileToStorage(upload_url, selectedFile)
 
@@ -363,11 +377,25 @@ async function refreshMediaBrowser() {
             card.querySelector('.btn-download').addEventListener('click', async (e) => {
                 const btn = e.currentTarget
                 btn.disabled = true
+                uploadStatus.textContent = 'Preparing download…'
+                uploadStatus.className = 'upload-status'
                 try {
                     const { data: { session } } = await supabase.auth.getSession()
                     if (!session) throw new Error('Not authenticated')
-                    const { download_url } = await requestDownloadUrl(apiGatewayUrl, session.access_token, f.file_path)
+                    const { request_id } = await requestDownloadIntent(apiGatewayUrl, session.access_token, f.file_path)
+                    const notification = await notificationWaiter.waitFor(
+                        request_id,
+                        ['media.download_ready', 'media.download_rejected'],
+                        30000,
+                    )
+                    if (notification.event_type === 'media.download_rejected') {
+                        const data = JSON.parse(notification.payload || '{}')
+                        throw new Error(data.reason || 'Download rejected')
+                    }
+                    const { download_url } = JSON.parse(notification.payload || '{}')
                     window.open(download_url, '_blank')
+                    uploadStatus.textContent = ''
+                    uploadStatus.className = 'upload-status'
                 } catch (err) {
                     console.error('Download failed:', err)
                     uploadStatus.textContent = `Download failed: ${err.message}`
@@ -383,10 +411,23 @@ async function refreshMediaBrowser() {
                 if (!confirmed) return
 
                 btn.disabled = true
+                uploadStatus.textContent = 'Deleting…'
+                uploadStatus.className = 'upload-status'
                 try {
                     const { data: { session } } = await supabase.auth.getSession()
                     if (!session) throw new Error('Not authenticated')
-                    await deleteFile(apiGatewayUrl, session.access_token, f.file_path)
+                    const { request_id } = await requestDeleteIntent(apiGatewayUrl, session.access_token, f.file_path)
+                    const notification = await notificationWaiter.waitFor(
+                        request_id,
+                        ['media.file_deleted', 'media.delete_rejected'],
+                        30000,
+                    )
+                    if (notification.event_type === 'media.delete_rejected') {
+                        const data = JSON.parse(notification.payload || '{}')
+                        throw new Error(data.reason || 'Delete rejected')
+                    }
+                    uploadStatus.textContent = ''
+                    uploadStatus.className = 'upload-status'
                     await Promise.all([refreshCredits(), refreshMediaBrowser()])
                 } catch (err) {
                     console.error('Delete failed:', err)
@@ -439,6 +480,14 @@ function formatNotification(evt) {
         case 'identity.signup': return `🎉 Flink mapped Signup: ${evt.event_time}`
         case 'identity.signout': return `👋 Flink mapped Signout: ${evt.event_time}`
         case 'user.message': return `💬 ${(data.email || '').split('@')[0]}: ${data.message || ''}`
+        case 'media.upload_ready': return `📤 Upload ready: ${data.file_path || ''}`
+        case 'media.upload_rejected': return `❌ Upload rejected: ${data.reason || ''}`
+        case 'media.upload_completed': return `✅ Upload complete: ${data.file_name || ''}`
+        case 'media.upload_expired': return `⏰ Upload expired: ${data.file_path || ''}`
+        case 'media.download_ready': return `📥 Download ready: ${data.file_path || ''}`
+        case 'media.download_rejected': return `❌ Download rejected: ${data.reason || ''}`
+        case 'media.file_deleted': return `🗑️ File deleted: ${data.file_name || ''}`
+        case 'media.delete_rejected': return `❌ Delete rejected: ${data.reason || ''}`
         default: return `📌 ${evt.event_type}: ${evt.event_time}`
     }
 }
@@ -454,7 +503,10 @@ function subscribeToEvents() {
         .on(
             'postgres_changes',
             { event: 'INSERT', schema: 'public', table: 'user_notifications' },
-            (payload) => addNotification(formatNotification(payload.new))
+            (payload) => {
+                addNotification(formatNotification(payload.new))
+                notificationWaiter.handleNotification(payload.new)
+            }
         )
         .subscribe();
 }
@@ -503,11 +555,12 @@ async function checkSession() {
         homeView.classList.remove('active-view')
         authView.classList.add('active-view')
 
-        // Clean up socket
+        // Clean up socket and pending async waiters
         if (realtimeChannel) {
             supabase.removeChannel(realtimeChannel)
             realtimeChannel = null
         }
+        notificationWaiter.cleanup()
 
         // Clear pane UI
         const list = document.getElementById('notifications-list');
