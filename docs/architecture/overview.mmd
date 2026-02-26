@@ -1,0 +1,86 @@
+graph TD
+    %% Shared styles
+    classDef frontend fill:#3b82f6,color:#fff,stroke:#1d4ed8,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef olap fill:#f97316,color:#fff,stroke:#c2410c,stroke-width:2px
+    classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
+    classDef telemetry fill:#ec4899,color:#fff,stroke:#be185d,stroke-width:2px
+    classDef mediaservice fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px
+
+    subgraph UserLayer["User Layer"]
+        WebUI["Vite Frontend"]:::frontend
+    end
+
+    subgraph AuthCore["Auth & Core (Supabase)"]
+        Supabase[("PostgreSQL & Auth")]:::db
+        UserNotifs[("user_notifications\n(Unified Egress)")]:::db
+        CreditLedger[("credit_ledger + media_files")]:::db
+    end
+
+    subgraph APIGateway["API Gateway (Go)"]
+        API["api-gateway"]:::gateway
+        GoConsumers["message-consumer\nmedia-service"]:::mediaservice
+    end
+
+    subgraph MessageBroker["Message Broker (Redpanda)"]
+        PublicTopics("public.* topics\n(identity, user, media)"):::broker
+        InternalTopics("internal.* topics\n(unified, intents)"):::broker
+        SchemaReg["Schema Registry"]:::registry
+    end
+
+    subgraph StreamProcessing["Stream Processing (Flink)"]
+        IdentityMsg["Identity & Message\nProcessors"]:::stream
+        MediaSaga["Upload Saga\n(Credit Check + TTL)"]:::stream
+        UnifiedProc["Unified Events\nProcessor"]:::stream
+    end
+
+    subgraph DataLake["Data Lake & OLAP"]
+        MinIO[("MinIO / S3")]:::db
+        Nessie["Nessie (Iceberg)"]:::registry
+        ClickHouse["ClickHouse"]:::olap
+    end
+
+    subgraph Observability["Observability"]
+        OTel["OTel → Prometheus\nLoki → Grafana"]:::telemetry
+    end
+
+    %% Primary data flows
+    WebUI -->|"Auth"| Supabase
+    Supabase -->|"pg_net webhooks"| API
+    WebUI -->|"REST + JWT"| API
+    UserNotifs -.->|"Supabase Realtime"| WebUI
+
+    API -->|"Produce Avro"| PublicTopics
+    API -->|"Produce Intents"| InternalTopics
+    API <-->|"Fetch Schemas"| SchemaReg
+
+    PublicTopics --> IdentityMsg
+    PublicTopics --> MediaSaga
+    InternalTopics --> MediaSaga
+    InternalTopics --> GoConsumers
+    PublicTopics --> GoConsumers
+    PublicTopics --> UnifiedProc
+
+    IdentityMsg -->|"JDBC"| UserNotifs
+    MediaSaga -->|"JDBC"| UserNotifs
+    MediaSaga -->|"JDBC"| CreditLedger
+    GoConsumers -->|"INSERT"| UserNotifs
+
+    UnifiedProc -->|"Produce"| InternalTopics
+    InternalTopics --> ClickHouse
+    PublicTopics -.->|"Tiered Storage"| Nessie
+    Nessie --> MinIO
+
+    WebUI -->|"Presigned PUT/GET"| MinIO
+
+    API -.->|"OTLP"| OTel
+    IdentityMsg -.->|"StatsD"| OTel
+
+    %% Click links to detail diagrams
+    click MediaSaga "./media-upload-saga.svg" "Upload Saga Detail"
+    click GoConsumers "./media-download-delete.svg" "Download & Delete Detail"
+    click IdentityMsg "./identity-messaging.svg" "Identity & Messaging Detail"
+    click ClickHouse "./analytics.svg" "Analytics & Data Lake Detail"

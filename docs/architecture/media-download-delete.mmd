@@ -1,0 +1,70 @@
+graph TD
+    classDef frontend fill:#3b82f6,color:#fff,stroke:#1d4ed8,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef mediaservice fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px
+
+    %% ── Shared nodes ──────────────────────────────────────────────────────────
+    WebUI([Web UI]):::frontend
+    API[API Gateway]:::gateway
+    MediaService[media-service]:::mediaservice
+    MediaFiles[(media_files DB)]:::db
+    MediaBucket[(MinIO Bucket)]:::db
+    FlinkMediaNotifs[Flink: media_notification_processor]:::stream
+    UserNotifs[(user_notifications)]:::broker
+
+    %% ── Download Flow ─────────────────────────────────────────────────────────
+    subgraph DownloadFlow["Download Saga"]
+        direction TB
+        DI_Topic([internal.media.download.intent]):::broker
+        DS_Topic([public.media.download.signed]):::broker
+        DR_Topic([public.media.download.rejected]):::broker
+        SupabaseRT_D[Supabase Realtime]:::stream
+    end
+
+    %% ── Delete Flow ───────────────────────────────────────────────────────────
+    subgraph DeleteFlow["Delete Saga"]
+        direction TB
+        DEI_Topic([internal.media.delete.intent]):::broker
+        DE_Topic([public.media.delete.events]):::broker
+        DER_Topic([public.media.delete.rejected]):::broker
+        SupabaseRT_Del[Supabase Realtime]:::stream
+    end
+
+    %% ── Download edges ────────────────────────────────────────────────────────
+    WebUI -->|"POST /api/v1/media/download-intent (JWT)"| API
+    API -->|"202 Accepted + request_id"| WebUI
+    API -->|"produce DownloadIntent"| DI_Topic
+    DI_Topic -->|consume| MediaService
+    MediaService -->|"query ownership\n(status = active)"| MediaFiles
+    MediaFiles -->|found| MediaService
+    MediaService -->|"generate presigned GET URL\nproduce FileDownloadUrlSigned"| DS_Topic
+    MediaFiles -->|not found| MediaService
+    MediaService -->|"produce FileDownloadRejected"| DR_Topic
+    DS_Topic -->|consume| FlinkMediaNotifs
+    DR_Topic -->|consume| FlinkMediaNotifs
+    FlinkMediaNotifs -->|"media.download_ready\nor media.download_rejected"| UserNotifs
+    UserNotifs -->|notify| SupabaseRT_D
+    SupabaseRT_D -->|"receive presigned URL"| WebUI
+    WebUI -->|"GET presigned URL"| MediaBucket
+
+    %% ── Delete edges ──────────────────────────────────────────────────────────
+    WebUI -->|"POST /api/v1/media/delete-intent (JWT)"| API
+    API -->|"202 Accepted + request_id"| WebUI
+    API -->|"produce DeleteIntent"| DEI_Topic
+    DEI_Topic -->|consume| MediaService
+    MediaService -->|"verify ownership"| MediaFiles
+    MediaFiles -->|found| MediaService
+    MediaService -->|"remove object"| MediaBucket
+    MediaBucket -->|"object removed"| MediaService
+    MediaService -->|"soft-delete row\n(UPDATE status='deleted')"| MediaFiles
+    MediaService -->|"produce FileDeleted"| DE_Topic
+    MediaFiles -->|"not found / error"| MediaService
+    MediaService -->|"produce FileDeleteRejected"| DER_Topic
+    DE_Topic -->|consume| FlinkMediaNotifs
+    DER_Topic -->|consume| FlinkMediaNotifs
+    FlinkMediaNotifs -->|"media.delete_complete\nor media.delete_rejected"| UserNotifs
+    UserNotifs -->|notify| SupabaseRT_Del
+    SupabaseRT_Del -->|"deletion confirmed\n(RLS filters status='active')"| WebUI
