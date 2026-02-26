@@ -52,6 +52,7 @@ var consumeTopics = []string{
 	"internal.media.download.intent",
 	"internal.media.delete.intent",
 	"internal.media.upload.retry",
+	"internal.media.delete.retry",
 }
 
 func main() {
@@ -163,6 +164,11 @@ func main() {
 		),
 		"internal.media.upload.retry": NewRetryHandler(
 			objectMover,
+			eventProducer,
+			cfg.MinioBucket,
+		),
+		"internal.media.delete.retry": NewDeleteRetryHandler(
+			objectRemover,
 			eventProducer,
 			cfg.MinioBucket,
 		),
