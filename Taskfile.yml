@@ -405,6 +405,35 @@ tasks:
     cmds:
       - npx playwright test
 
+  test:cold-start:
+    desc: Full cold-start regression — purge all state, rebuild from scratch, run all tests
+    cmds:
+      - task: clean
+      - task: purge
+      - task: init
+      - task: test:e2e
+      - |
+        # Start Vite dev server in background for browser tests
+        cd frontend && npm install && npx vite --host 127.0.0.1 &
+        VITE_PID=$!
+        trap "kill $VITE_PID 2>/dev/null" EXIT
+
+        # Wait for Vite to be ready (up to 30s)
+        echo "⏳ Waiting for Vite dev server on :5173..."
+        for i in $(seq 1 30); do
+          if curl -s http://127.0.0.1:5173 > /dev/null 2>&1; then
+            echo "✅ Vite dev server ready."
+            break
+          fi
+          if [ $i -eq 30 ]; then
+            echo "❌ Vite dev server failed to start." && exit 1
+          fi
+          sleep 1
+        done
+
+        # Run browser tests
+        cd tests/browser && npm install && npx playwright install chromium && npx playwright test
+
   # ---------------------------------------------------------------------------
   # Utility
   # ---------------------------------------------------------------------------

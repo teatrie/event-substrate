@@ -180,7 +180,7 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 **Observation:** After `task purge && task init`, the FlinkDeployment CRD reports `RUNNING / STABLE` within seconds, but the taskmanager takes ~2 minutes to fully initialize (compile SQL, connect to Kafka, start consuming). E2E tests that run immediately after init hit a 30-second timeout because Flink isn't processing events yet. The notification eventually appears in the database — just 2+ minutes late.
 
-**Decision:** Added a `warmup.mjs` canary test to `run_all.sh` that signs up a throwaway user and polls for the `identity.signup` notification with a generous 3-minute timeout. If the canary succeeds, Flink is ready and all subsequent tests use standard 30s timeouts. If it fails, the pipeline is genuinely broken — not just slow. This eliminates false negatives from cold-start timing without inflating every test's timeout.
+**Decision:** Added a `warmup.mjs` canary test to `run_all.sh` that exercises the full pipeline with a 3-minute timeout: (1) signs up a throwaway user and waits for `identity.signup` notification (warms identity + credit Flink jobs), then (2) performs a complete canary upload — credit wait, sign in, upload-intent, presigned URL, MinIO PUT, wait for `media_files` row (warms credit check PyFlink, move saga PyFlink, and SQL runner Flink SQL). If the canary succeeds, all Flink jobs have completed at least one checkpoint cycle and subsequent tests use standard 30s timeouts. If it fails, the pipeline is genuinely broken — not just slow. **Key insight:** canary signup alone is insufficient after a fresh deploy — the upload pipeline (PyFlink credit check + move saga) takes additional checkpoint cycles beyond what the identity pipeline exercises.
 
 ### 15. Postgres Connection Exhaustion Kills Flink Silently
 
@@ -239,6 +239,28 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** The saga supervisor originally only emitted results from `on_timer` (120s after `upload.received`). Even when both events arrived within milliseconds, the pipeline waited the full timeout before producing `upload.confirmed`. This made E2E tests (60s timeout) impossible and added unnecessary latency to the happy path.
 
 **Decision:** Check for both events in `process_element1` and `process_element2`. If both states are present when either event arrives, emit `confirmed` immediately and clear state. The timer still fires but finds empty state and becomes a no-op. This gives sub-second confirmation on the happy path while preserving the timeout/retry/DLQ behavior when `file.ready` never arrives.
+
+---
+
+## 🗑️ Delete Saga with Retry & Dead-Letter
+
+### 24. SoftDelete-First Ordering Separates User Concern from Platform Concern
+
+**Observation:** The original delete handler attempted MinIO `RemoveObject` first and emitted `FileDeleted` only on success. If MinIO was down, the user received `FileDeleteRejected` and had to manually retry — coupling the user experience to storage layer availability.
+
+**Decision:** Reordered to soft-delete the DB row first (`UPDATE status='deleted'`), then emit `FileDeleted` immediately. The user sees instant feedback — the file vanishes from their view as soon as the DB update succeeds. MinIO cleanup is a separate platform concern: if `RemoveObject` fails, the handler emits `FileDeleteRetry` (with `retry_count=0`) instead of `FileDeleteRejected`. The retry loop operates silently in the background (up to 3 retries → dead-letter). `FileDeleteRejected` is now reserved exclusively for ownership/authorization failures, not transient infrastructure errors.
+
+### 25. MinIO RemoveObject Is Idempotent — Returns nil for Non-Existent Objects
+
+**Observation:** MinIO's `RemoveObject` returns `nil` (no error) when called on a key that doesn't exist. This is S3-compatible behavior (DELETE on a non-existent key is a no-op 204). This means E2E tests cannot trigger the DLQ path by producing a `FileDeleteRetry` event with a fake file path — the handler will "succeed" (nil error) and silently complete.
+
+**Decision:** Unit tests with mock `ObjectRemover` returning errors are the correct way to verify retry/DLQ handler logic. The E2E test (`test_delete_retry_health.mjs`) validates infrastructure health — topics exist, schemas registered, consumer group offset advances — but cannot exercise the failure/DLQ path without injecting actual MinIO failures. This is acceptable: 20 unit tests cover all handler branches, and the E2E test confirms the plumbing is live.
+
+### 26. rpk Topic Operations and Group Operations Require Separate ACL Grants
+
+**Observation:** The E2E test produced a message to `internal.media.delete.retry` using the `flink-processor` SASL identity (which has topic produce/consume ACLs), then tried `rpk group describe media-service-consumer` with the same identity. This failed with `GROUP_AUTHORIZATION_FAILED` — the `flink-processor` user has topic-level ACLs but not group-level ACLs (`DescribeGroup`).
+
+**Decision:** Use the `superuser` identity for administrative rpk commands like `rpk group describe` in E2E tests. Topic-level operations (produce, consume, list) and group-level operations (describe, list) are separate ACL categories in Kafka/Redpanda. A service identity's ACLs are scoped to its operational needs — `flink-processor` needs topic read/write but never needs to describe consumer groups.
 
 ---
 
