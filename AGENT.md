@@ -8,6 +8,14 @@ Service-specific conventions live in each sub-folder's `AGENT.md`:
 - `frontend/AGENT.md` — Vite, vitest, Playwright, media UI
 - `supabase/AGENT.md` — migrations, RLS, Realtime, event types
 
+Custom skills live in `.claude/skills/<name>/SKILL.md`:
+- `/tdd-execute` — Red-Green-Refactor subagent loop (co-locates `tdd-protocol.md`)
+- `/feature-epic` — multi-domain feature decomposition + sequential TDD
+- `/agent-team` — cost-effective multi-agent orchestration with model selection
+- `/bug-fix` — orchestrated diagnosis and fix with review gates
+- `/ship` — group dirty working tree into sequential PRs
+- `/mermaid-to-svg` — convert `.mmd` to `.svg` via CLI
+
 ## Domain Boundaries (DDD)
 
 This platform is organized around explicit domain ownership. Violating these boundaries creates tight coupling and breaks the event-driven contract:
