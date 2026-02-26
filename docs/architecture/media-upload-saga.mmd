@@ -1,0 +1,73 @@
+graph TD
+    %% Shared styles
+    classDef frontend fill:#3b82f6,color:#fff,stroke:#1d4ed8,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
+    classDef mediaservice fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px
+
+    %% Nodes
+    WebUI["Vite Frontend"]:::frontend
+    API["api-gateway\n(Go)"]:::gateway
+    MediaService["media-service\n(Go consumer)"]:::mediaservice
+
+    IntentTopic("internal.media.upload.intent"):::broker
+    ApprovedTopic("public.media.upload.approved"):::broker
+    RejectedTopic("public.media.upload.rejected"):::broker
+    SignedTopic("public.media.upload.signed"):::broker
+    UploadEventsTopic("public.media.upload.events"):::broker
+    ExpiredTopic("public.media.expired.events"):::broker
+
+    PyFlinkCreditCheck["PyFlink\ncredit_check_processor\n(atomic check+deduct)"]:::stream
+    PyFlinkTTL["PyFlink TTL\nKeyedCoProcessFunction\n(arm/complete/expire)"]:::stream
+    FlinkMediaNotifs["Flink\nmedia_notification_processor\n(JDBC egress)"]:::stream
+    FlinkCredits["Flink\ncredit_balance_processor\n(refund on expiry)"]:::stream
+
+    MinIO[("MinIO\nmedia-uploads bucket")]:::db
+    UserNotifs[("user_notifications\n(Unified Egress)")]:::db
+    CreditLedger[("credit_ledger")]:::db
+    SupabaseRealtime["Supabase Realtime"]:::db
+
+    %% Step 1: Upload intent
+    WebUI -->|"1a. POST /api/v1/media/upload-intent"| API
+    API -->|"1b. 202 Accepted"| WebUI
+    API -->|"1c. produce UploadIntent"| IntentTopic
+
+    %% Step 2: Credit check
+    IntentTopic -->|"2a. consume intent"| PyFlinkCreditCheck
+    PyFlinkCreditCheck -->|"2b. approved: deduct 1 credit"| ApprovedTopic
+    PyFlinkCreditCheck -->|"2b. rejected: insufficient credits"| RejectedTopic
+    PyFlinkCreditCheck -->|"2c. write deduction"| CreditLedger
+
+    %% Step 3: Presigned URL generation
+    ApprovedTopic -->|"3a. consume approved"| MediaService
+    MediaService -->|"3b. produce FileUploadUrlSigned"| SignedTopic
+
+    %% Step 4: Notifications fanout
+    SignedTopic -->|"4. consume signed"| FlinkMediaNotifs
+    RejectedTopic -->|"4. consume rejected"| FlinkMediaNotifs
+    UploadEventsTopic -->|"4. consume upload.events"| FlinkMediaNotifs
+    ExpiredTopic -->|"4. consume expired.events"| FlinkMediaNotifs
+    FlinkMediaNotifs -->|"4. JDBC insert"| UserNotifs
+
+    %% Step 5: Frontend receives URL and uploads directly
+    UserNotifs -->|"5a. Supabase Realtime push"| SupabaseRealtime
+    SupabaseRealtime -->|"5b. presigned URL delivered"| WebUI
+    WebUI -->|"5c. presigned PUT (browser-direct,\nclaim check pattern)"| MinIO
+
+    %% Step 6: MinIO webhook on upload complete
+    MinIO -->|"6a. S3 webhook POST /webhooks/media-upload"| API
+    API -->|"6b. produce NewFileUploaded"| UploadEventsTopic
+
+    %% Step 7: TTL expiry processor
+    SignedTopic -->|"7a. arm timer"| PyFlinkTTL
+    UploadEventsTopic -->|"7b. mark completed"| PyFlinkTTL
+    PyFlinkTTL -->|"7c. timer fired: no upload received\nproduce FileUploadExpired"| ExpiredTopic
+
+    %% Step 8: Expired event cleanup and refund
+    ExpiredTopic -->|"8a. consume expired\nbest-effort RemoveObject"| MediaService
+    MediaService -.->|"8b. delete partial object\n(best-effort)"| MinIO
+    ExpiredTopic -->|"8c. consume expired"| FlinkCredits
+    FlinkCredits -->|"8d. refund +1 credit"| CreditLedger

@@ -1,0 +1,90 @@
+graph TD
+    %% Shared styles
+    classDef frontend fill:#3b82f6,color:#fff,stroke:#1d4ed8,stroke-width:2px
+    classDef gateway fill:#10b981,color:#fff,stroke:#047857,stroke-width:2px
+    classDef broker fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px
+    classDef stream fill:#f59e0b,color:#fff,stroke:#b45309,stroke-width:2px
+    classDef db fill:#8b5cf6,color:#fff,stroke:#6d28d9,stroke-width:2px
+    classDef registry fill:#64748b,color:#fff,stroke:#334155,stroke-width:2px
+    classDef telemetry fill:#ec4899,color:#fff,stroke:#be185d,stroke-width:2px
+
+    %% Nodes
+    WebUI["Vite Frontend"]:::frontend
+    Supabase[("Supabase\n(Auth + PostgreSQL)")]:::db
+    API["api-gateway\n(Go, ConfigMap/fsnotify)"]:::gateway
+    SchemaReg["Schema Registry"]:::registry
+
+    LoginTopic("public.identity.login.events"):::broker
+    SignupTopic("public.identity.signup.events"):::broker
+    SignoutTopic("public.identity.signout.events"):::broker
+    MessageTopic("public.user.message.events"):::broker
+    UnifiedTopic("internal.platform.unified.events"):::broker
+    EchoTopic("internal.identity.login.echo"):::broker
+
+    FlinkLogin["Flink SQL\nlogin_events_processor"]:::stream
+    FlinkSignup["Flink SQL\nsignup_events_processor"]:::stream
+    FlinkSignout["Flink SQL\nsignout_events_processor"]:::stream
+    FlinkUnion["Flink SQL\nunified_events_processor\n(UNION ALL)"]:::stream
+    FlinkCredits["Flink SQL\ncredit_balance_processor"]:::stream
+    PyFlinkEcho["PyFlink\necho_processor"]:::stream
+
+    GoMessageConsumer["Go message-consumer\n(twmb/franz-go)"]:::gateway
+    KEDA["KEDA Autoscaler\n(lag threshold=5)"]:::telemetry
+
+    UserNotifs[("user_notifications\n(Unified Egress)")]:::db
+    CreditLedger[("credit_ledger")]:::db
+
+    %% ── Identity Flow ──────────────────────────────────────────────────────
+
+    %% Step 1: Frontend authenticates via Supabase Auth
+    WebUI -->|"1. Sign in / sign up / sign out"| Supabase
+
+    %% Step 2: PostgreSQL trigger fires pg_net webhook
+    Supabase -->|"2. pg_net webhook\nPOST /webhooks/{topic}\nX-Webhook-Secret"| API
+
+    %% Step 3: Gateway fetches schema + produces Avro
+    API <-->|"fetch Avro schema"| SchemaReg
+    API -->|"3a. produce Avro"| LoginTopic
+    API -->|"3b. produce Avro"| SignupTopic
+    API -->|"3c. produce Avro"| SignoutTopic
+
+    %% Step 4: Flink SQL processors consume per-topic
+    LoginTopic  -->|"4a. consume"| FlinkLogin
+    SignupTopic  -->|"4b. consume"| FlinkSignup
+    SignoutTopic -->|"4c. consume"| FlinkSignout
+
+    %% Step 5: Each processor writes notification via JDBC
+    FlinkLogin  -->|"5a. JDBC INSERT\nevent_type: identity.login"| UserNotifs
+    FlinkSignup -->|"5b. JDBC INSERT\nevent_type: identity.signup"| UserNotifs
+    FlinkSignout-->|"5c. JDBC INSERT\nevent_type: identity.signout"| UserNotifs
+
+    %% Step 6: unified_events_processor UNION ALL → internal topic
+    LoginTopic  -->|"6. consume"| FlinkUnion
+    SignupTopic  -->|"6. consume"| FlinkUnion
+    SignoutTopic -->|"6. consume"| FlinkUnion
+    FlinkUnion  -->|"produce unified Avro"| UnifiedTopic
+
+    %% Step 7: PyFlink echo_processor
+    LoginTopic -->|"7. consume login events"| PyFlinkEcho
+    PyFlinkEcho -->|"produce echo"| EchoTopic
+
+    %% Step 8: credit_balance_processor on signup
+    SignupTopic  -->|"8a. consume signup"| FlinkCredits
+    FlinkCredits -->|"8b. JDBC INSERT +2 credits"| CreditLedger
+    FlinkCredits -->|"8c. JDBC INSERT\nevent_type: credit.balance_changed"| UserNotifs
+
+    %% ── User Messaging Flow ────────────────────────────────────────────────
+
+    %% Step 1-2: Frontend POSTs message; Gateway validates JWT + allowlist
+    WebUI -->|"1. POST /api/v1/events/message\n(JWT)"| API
+    API -->|"2. validate JWT (HS256 + ES256)\nroutes.yaml allowlist\nproduce Avro"| MessageTopic
+
+    %% Step 3-4: Go message-consumer (KEDA-scaled) consumes + writes
+    KEDA -.->|"autoscale on\nconsumer lag"| GoMessageConsumer
+    MessageTopic -->|"3. consume"| GoMessageConsumer
+    GoMessageConsumer -->|"4. INSERT\nevent_type: user.message\n(broadcast / direct)"| UserNotifs
+
+    %% ── Common Egress ──────────────────────────────────────────────────────
+
+    %% Supabase Realtime pushes to frontend (RLS scopes visibility)
+    UserNotifs -->|"Supabase Realtime\n(single subscription,\nRLS: broadcast vs direct)"| WebUI
