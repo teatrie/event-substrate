@@ -1079,9 +1079,8 @@ describe('createNotificationWaiter', () => {
   it('resolves waitFor when handleNotification delivers a matching notification', async () => {
     const waiter = createNotificationWaiter()
     const notification = {
-      request_id: 'req-123',
       event_type: 'media.upload_ready',
-      payload: JSON.stringify({ upload_url: 'https://storage.example.com' }),
+      payload: JSON.stringify({ upload_url: 'https://storage.example.com', request_id: 'req-123' }),
     }
 
     const promise = waiter.waitFor('req-123', ['media.upload_ready', 'media.upload_rejected'], 5000)
@@ -1094,9 +1093,8 @@ describe('createNotificationWaiter', () => {
   it('resolves with rejection notification when event_type is in expected set', async () => {
     const waiter = createNotificationWaiter()
     const rejectionNotification = {
-      request_id: 'req-456',
       event_type: 'media.upload_rejected',
-      payload: JSON.stringify({ reason: 'Insufficient credits' }),
+      payload: JSON.stringify({ reason: 'Insufficient credits', request_id: 'req-456' }),
     }
 
     const promise = waiter.waitFor('req-456', ['media.upload_ready', 'media.upload_rejected'], 5000)
@@ -1110,9 +1108,8 @@ describe('createNotificationWaiter', () => {
     vi.useFakeTimers()
     const waiter = createNotificationWaiter()
     const wrongTypeNotification = {
-      request_id: 'req-789',
       event_type: 'media.download_ready',
-      payload: JSON.stringify({}),
+      payload: JSON.stringify({ request_id: 'req-789' }),
     }
 
     const promise = waiter.waitFor('req-789', ['media.upload_ready', 'media.upload_rejected'], 1000)
@@ -1134,8 +1131,8 @@ describe('createNotificationWaiter', () => {
 
   it('handles multiple concurrent waiters independently', async () => {
     const waiter = createNotificationWaiter()
-    const n1 = { request_id: 'req-a', event_type: 'media.upload_ready', payload: '{}' }
-    const n2 = { request_id: 'req-b', event_type: 'media.download_ready', payload: '{}' }
+    const n1 = { event_type: 'media.upload_ready', payload: JSON.stringify({ request_id: 'req-a' }) }
+    const n2 = { event_type: 'media.download_ready', payload: JSON.stringify({ request_id: 'req-b' }) }
 
     const p1 = waiter.waitFor('req-a', ['media.upload_ready'], 5000)
     const p2 = waiter.waitFor('req-b', ['media.download_ready'], 5000)
@@ -1152,9 +1149,8 @@ describe('createNotificationWaiter', () => {
     vi.useFakeTimers()
     const waiter = createNotificationWaiter()
     const wrongIdNotification = {
-      request_id: 'req-different',
       event_type: 'media.upload_ready',
-      payload: '{}',
+      payload: JSON.stringify({ request_id: 'req-different' }),
     }
 
     const promise = waiter.waitFor('req-correct', ['media.upload_ready'], 1000)
@@ -1176,7 +1172,77 @@ describe('createNotificationWaiter', () => {
   it('handleNotification is a no-op when no waiters are pending', () => {
     const waiter = createNotificationWaiter()
     expect(() => {
-      waiter.handleNotification({ request_id: 'req-none', event_type: 'media.upload_ready', payload: '{}' })
+      waiter.handleNotification({ event_type: 'media.upload_ready', payload: JSON.stringify({ request_id: 'req-none' }) })
     }).not.toThrow()
+  })
+
+  it('handles notification with missing payload gracefully', () => {
+    // Regression: was throwing because JSON.parse(undefined) blows up.
+    // Fix: handleNotification uses `notification.payload || '{}'` so missing
+    // payload is treated as an empty object and silently ignored.
+    const waiter = createNotificationWaiter()
+    expect(() => {
+      waiter.handleNotification({ event_type: 'media.upload_ready' })
+    }).not.toThrow()
+  })
+
+  it('handles notification with null payload gracefully', () => {
+    // null payload should also be handled — `null || '{}'` yields '{}',
+    // which parses to an empty object with no request_id or file_path,
+    // so no waiter is matched and nothing throws.
+    const waiter = createNotificationWaiter()
+    expect(() => {
+      waiter.handleNotification({ event_type: 'media.file_deleted', payload: null })
+    }).not.toThrow()
+  })
+
+  it('handles notification with malformed JSON payload by propagating a SyntaxError', () => {
+    // Garbled payloads from the DB cause JSON.parse to throw a SyntaxError.
+    // This documents the current behavior: handleNotification does not wrap
+    // JSON.parse in a try/catch, so callers (the Realtime subscription handler)
+    // are responsible for guarding against malformed payloads.
+    const waiter = createNotificationWaiter()
+    expect(() => {
+      waiter.handleNotification({ event_type: 'media.upload_ready', payload: '{not valid json' })
+    }).toThrow(SyntaxError)
+  })
+
+  it('matches by file_path when request_id is absent (upload_completed, file_deleted)', async () => {
+    const waiter = createNotificationWaiter()
+    const filePath = 'uploads/user-1/req-abc/photo.jpg'
+    const notification = {
+      event_type: 'media.upload_completed',
+      payload: JSON.stringify({ file_path: filePath, file_name: 'photo.jpg' }),
+    }
+
+    const promise = waiter.waitFor(filePath, ['media.upload_completed', 'media.upload_expired'], 5000)
+    waiter.handleNotification(notification)
+
+    const result = await promise
+    expect(result).toEqual(notification)
+  })
+
+  it('prefers request_id match over file_path match', async () => {
+    const waiter = createNotificationWaiter()
+    const notification = {
+      event_type: 'media.upload_ready',
+      payload: JSON.stringify({ request_id: 'req-id', file_path: 'some/path', upload_url: 'https://example.com' }),
+    }
+
+    // Register waiters for both keys
+    const reqPromise = waiter.waitFor('req-id', ['media.upload_ready'], 5000)
+    const pathPromise = waiter.waitFor('some/path', ['media.upload_ready'], 1000)
+
+    waiter.handleNotification(notification)
+
+    // request_id waiter should resolve
+    const result = await reqPromise
+    expect(result).toEqual(notification)
+
+    // file_path waiter should NOT have resolved (request_id matched first)
+    // It should eventually timeout
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(1001)
+    await expect(pathPromise).rejects.toThrow()
   })
 })

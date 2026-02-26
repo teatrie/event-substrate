@@ -269,9 +269,23 @@ uploadForm.addEventListener('submit', async (e) => {
             throw new Error(data.reason || 'Upload rejected')
         }
 
-        const { upload_url } = JSON.parse(notification.payload || '{}')
+        const { upload_url, file_path } = JSON.parse(notification.payload || '{}')
         uploadStatus.textContent = 'Uploading file…'
         await uploadFileToStorage(upload_url, selectedFile)
+
+        // Wait for Flink to confirm the upload was processed and media_files updated
+        uploadStatus.textContent = 'Processing…'
+        const completedNotification = await notificationWaiter.waitFor(
+            file_path,
+            ['media.upload_completed', 'media.upload_expired', 'media.upload_failed'],
+            30000,
+        )
+        if (completedNotification.event_type === 'media.upload_expired') {
+            throw new Error('Upload expired before processing completed')
+        }
+        if (completedNotification.event_type === 'media.upload_failed') {
+            throw new Error('Upload failed after retries. Please try again.')
+        }
 
         uploadStatus.textContent = '✓ Upload complete'
         uploadStatus.className = 'upload-status success'
@@ -416,9 +430,9 @@ async function refreshMediaBrowser() {
                 try {
                     const { data: { session } } = await supabase.auth.getSession()
                     if (!session) throw new Error('Not authenticated')
-                    const { request_id } = await requestDeleteIntent(apiGatewayUrl, session.access_token, f.file_path)
+                    await requestDeleteIntent(apiGatewayUrl, session.access_token, f.file_path)
                     const notification = await notificationWaiter.waitFor(
-                        request_id,
+                        f.file_path,
                         ['media.file_deleted', 'media.delete_rejected'],
                         30000,
                     )
@@ -484,6 +498,7 @@ function formatNotification(evt) {
         case 'media.upload_rejected': return `❌ Upload rejected: ${data.reason || ''}`
         case 'media.upload_completed': return `✅ Upload complete: ${data.file_name || ''}`
         case 'media.upload_expired': return `⏰ Upload expired: ${data.file_path || ''}`
+        case 'media.upload_failed': return `❌ Upload failed: ${data.failure_reason || 'unknown'}`
         case 'media.download_ready': return `📥 Download ready: ${data.file_path || ''}`
         case 'media.download_rejected': return `❌ Download rejected: ${data.reason || ''}`
         case 'media.file_deleted': return `🗑️ File deleted: ${data.file_name || ''}`

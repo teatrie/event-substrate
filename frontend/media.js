@@ -175,12 +175,19 @@ export function createNotificationWaiter() {
     },
 
     handleNotification(notification) {
-      const waiter = pending.get(notification.request_id)
-      if (!waiter) return
-      if (!waiter.eventTypes.has(notification.event_type)) return
-      clearTimeout(waiter.timer)
-      pending.delete(notification.request_id)
-      waiter.resolve(notification)
+      const data = JSON.parse(notification.payload || '{}')
+      // Match by request_id first, then fall back to file_path.
+      // Some notifications (upload_completed, file_deleted) lack request_id
+      // but always carry file_path.
+      for (const key of [data.request_id, data.file_path].filter(Boolean)) {
+        const waiter = pending.get(key)
+        if (!waiter) continue
+        if (!waiter.eventTypes.has(notification.event_type)) continue
+        clearTimeout(waiter.timer)
+        pending.delete(key)
+        waiter.resolve(notification)
+        return
+      }
     },
 
     cleanup() {
