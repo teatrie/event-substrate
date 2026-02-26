@@ -36,13 +36,15 @@ The API Gateway validates JWTs via shared `jwtKeyFunc` supporting HS256 (`SUPABA
 
 ## Media Service (go-services/media-service/)
 
-Dedicated Kafka consumer + HTTP webhook service owning MinIO presigned URLs, file metadata queries, object lifecycle, and move-to-permanent storage. Consumes 5 Kafka topics via a `TopicRouter` and serves 2 MinIO webhook endpoints on HTTP :8090:
+Dedicated Kafka consumer + HTTP webhook service owning MinIO presigned URLs, file metadata queries, object lifecycle, and move-to-permanent storage. Consumes 6 Kafka topics via a `TopicRouter` and serves 2 MinIO webhook endpoints on HTTP :8090:
 
 **Upload Signing** (`upload_signing_handler.go`): Consumes `public.media.upload.approved` → generates presigned PUT URL → emits `FileUploadUrlSigned` to `public.media.upload.signed`. Uses `URLSigner` interface with `publicMinioClient` (browser-reachable URLs).
 
 **Download Signing** (`download_signing_handler.go`): Consumes `internal.media.download.intent` → verifies ownership via `FileMetadataLookup` → generates presigned GET URL → emits `FileDownloadUrlSigned` to `public.media.download.signed` or `FileDownloadRejected` on not-found/error.
 
-**Delete** (`delete_handler.go`): Consumes `internal.media.delete.intent` → verifies ownership → removes from MinIO (before DB) → soft-deletes DB row → emits `FileDeleted` to `public.media.delete.events` or `FileDeleteRejected`.
+**Delete** (`delete_handler.go`): Consumes `internal.media.delete.intent` → verifies ownership → **soft-deletes DB row first** → emits `FileDeleted` → best-effort `RemoveObject` from MinIO. On MinIO failure: emits `FileDeleteRetry` to `internal.media.delete.retry` (retry_count=0). On ownership/DB failure: emits `FileDeleteRejected`.
+
+**Delete Retry** (`delete_retry_handler.go`): Consumes `internal.media.delete.retry` → re-attempts `RemoveObject`. On success: silent (user already notified). On failure + retry_count < 3: re-emits with retry_count+1. On failure + retry_count >= 3: emits `FileDeleteDeadLetter` to `internal.media.delete.dead-letter` for ops cleanup.
 
 **Expired Cleanup** (`expired_cleanup_handler.go`): Consumes `public.media.expired.events` → best-effort MinIO `RemoveObject` (errors logged, not returned). MinIO 24h lifecycle policy is the backstop.
 

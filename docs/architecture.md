@@ -87,10 +87,12 @@ The media upload pipeline is a fully async event-driven saga spanning 5 services
 ### Delete Saga
 
 1. The Frontend calls `POST /api/v1/media/delete-intent` (JWT) — returns `202 Accepted` with `request_id`.
-2. The `media-service` consumes `internal.media.delete.intent`, verifies ownership, removes the object from MinIO, soft-deletes the DB row (`UPDATE status='deleted'`), and emits `FileDeleted` to `public.media.delete.events`. On failure: emits `FileDeleteRejected`.
-3. Flink routes the notification. RLS policies filter `status = 'active'`, so deleted files vanish immediately from all user queries.
+2. The `media-service` consumes `internal.media.delete.intent`, verifies ownership, then **soft-deletes the DB row first** (`UPDATE status='deleted'`) and emits `FileDeleted` to `public.media.delete.events`. The user sees immediate success.
+3. After notifying the user, the handler attempts `RemoveObject` from MinIO (best-effort). If MinIO fails, emits `FileDeleteRetry` to `internal.media.delete.retry` with `retry_count=0`.
+4. **Retry loop:** The `DeleteRetryHandler` consumes retry events, re-attempts `RemoveObject`. On failure: re-emits with `retry_count+1` (up to 3 retries). After 3 failures: emits `FileDeleteDeadLetter` to `internal.media.delete.dead-letter` for ops/cron cleanup.
+5. On ownership/DB failure: emits `FileDeleteRejected` to `public.media.delete.rejected`. Flink routes both success and rejection notifications. RLS policies filter `status = 'active'`, so deleted files vanish immediately.
 
-> **Delete Ordering:** MinIO object removal happens *before* the DB soft-delete. If MinIO fails, the file still exists and the user can retry. If the DB fails after MinIO succeeds, the soft-delete can be retried (idempotent).
+> **Delete Ordering:** DB soft-delete happens *before* MinIO object removal. This ensures the user sees immediate feedback — the file disappears from their view as soon as the DB update succeeds. MinIO cleanup is a platform concern: retried silently in the background, with dead-letter for orphaned objects that need manual/cron cleanup. No credit refund on delete.
 
 ---
 
