@@ -6,7 +6,7 @@ Convert a Mermaid `.mmd` file to SVG.
 
 Usage: /mermaid-to-svg [path]
 
-If no path argument is provided, default to `architecture.mmd` -> `architecture.svg` in the project root.
+If no path argument is provided, default to `docs/architecture/overview.mmd` -> `docs/architecture/overview.svg` in the project root.
 
 Steps:
 1. Resolve the input `.mmd` file path (from argument or default).

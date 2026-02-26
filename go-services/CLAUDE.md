@@ -18,7 +18,7 @@ The API Gateway validates JWTs via shared `jwtKeyFunc` supporting HS256 (`SUPABA
 
 ## Media Endpoints — Sync (api-gateway, legacy)
 
-**Upload** (`upload_handler.go`): Generates presigned PUT URLs. Raw files never traverse the gateway. Credits deducted on upload completion (async MinIO webhook), not at URL request time. Webhook handler at `/webhooks/media-upload` (no auth — network-isolated). See [learnings.md](../learnings.md) for MinIO gotchas.
+**Upload** (`upload_handler.go`): Generates presigned PUT URLs. Raw files never traverse the gateway. Credits deducted on upload completion (async MinIO webhook), not at URL request time. Webhook handler at `/webhooks/media-upload` (no auth — network-isolated). See [learnings.md](../docs/learnings.md) for MinIO gotchas.
 
 **Download** (`download_handler.go`): `POST /api/v1/media/download-url` — verifies ownership via `PostgresFileStore.GetFileMetadata()` (queries `media_files` WHERE `status = 'active'`), generates presigned GET URL, emits `FileDownloaded` to `public.media.download.events`.
 

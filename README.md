@@ -6,7 +6,7 @@ This is a production-grade blueprint for high-scale, event-driven applications. 
 
 Instead of building individual features, this stack focuses on the **plumbing of high-throughput data**: strictly authenticated ingress, dynamic routing, real-time stream processing, and sub-second analytical querying.
 
-See [architecture.md](./architecture.md) for a detailed architecture diagram and data flow summary.
+See [architecture.md](./docs/architecture.md) for a detailed architecture diagram and data flow summary.
 
 ---
 
@@ -102,9 +102,9 @@ When extending or maintaining this platform, **strict adherence to framework and
 - `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
 - `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
 - `tests/e2e/`: End-to-end pipeline tests validating the full data flow into `user_notifications`.
-- `github_cicd_plan.md`: Roadmap for GitHub Actions, multisite runners, and the "Lean CI" profile.
-- `data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
-- `data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
+- `docs/github_cicd_plan.md`: Roadmap for GitHub Actions, multisite runners, and the "Lean CI" profile.
+- `docs/data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
+- `docs/data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
 - `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
 - `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`).
 - `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).

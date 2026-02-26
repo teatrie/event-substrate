@@ -1,6 +1,6 @@
 # Agent Guidelines
 
-Event-driven microservices platform. See [README.md](./README.md) for architecture overview, [architecture.md](./architecture.md) for data flow, [learnings.md](./learnings.md) for gotchas, [productionization.md](./productionization.md) for cloud deployment, [github_cicd_plan.md](./github_cicd_plan.md) for CI/CD, [data_governance_plan.md](./data_governance_plan.md) for governance, and [data_processing_plan.md](./data_processing_plan.md) for Spark/Airflow.
+Event-driven microservices platform. See [README.md](./README.md) for architecture overview, [architecture.md](./docs/architecture.md) for data flow, [learnings.md](./docs/learnings.md) for gotchas, [productionization.md](./docs/productionization.md) for cloud deployment, [github_cicd_plan.md](./docs/github_cicd_plan.md) for CI/CD, [data_governance_plan.md](./docs/data_governance_plan.md) for governance, and [data_processing_plan.md](./docs/data_processing_plan.md) for Spark/Airflow.
 
 Service-specific conventions live in each sub-folder's `AGENT.md`:
 - `go-services/AGENT.md` — Go, Docker, media endpoints, credit economy
@@ -44,5 +44,5 @@ This platform is organized around explicit domain ownership. Violating these bou
 ## Key Knowledge
 - **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Use `/feature-epic` for multi-domain features (breaks into domains, runs TDD per domain). Add `/agent-team` to either for cost-effective model selection and escalation. Skip TDD for config/YAML, migrations, docs, one-line fixes.
 - **Testing:** E2E tests in `tests/e2e/` are mandatory for every feature. Plan them explicitly in Phase 1 of `/feature-epic`. Run `task start` then `task test:e2e` after pipeline changes.
-- **Architecture Diagram:** Update `architecture.mmd` and regenerate `architecture.svg` (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes.
-- **Documentation:** After any change, update all affected docs: `README.md`, `architecture.md`, `architecture.mmd`, `AGENT.md`, `learnings.md`, `productionization.md`, `github_cicd_plan.md`, `data_governance_plan.md`, and `data_processing_plan.md`.
+- **Architecture Diagram:** Update diagrams in `docs/architecture/` and regenerate SVGs (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes. Overview: `docs/architecture/overview.mmd`. Detail diagrams: `media-upload-saga.mmd`, `media-download-delete.mmd`, `identity-messaging.mmd`, `analytics.mmd`.
+- **Documentation:** After any change, update all affected docs: `README.md`, `docs/architecture.md`, `docs/architecture/*.mmd`, `AGENT.md`, `docs/learnings.md`, `docs/productionization.md`, `docs/github_cicd_plan.md`, `docs/data_governance_plan.md`, and `docs/data_processing_plan.md`.
