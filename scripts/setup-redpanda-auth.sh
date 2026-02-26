@@ -23,6 +23,7 @@ $RPK acl user create flink-processor     --password 'flink-processor-local-pw'  
 $RPK acl user create message-consumer    --password 'message-consumer-local-pw'  --mechanism SCRAM-SHA-256
 $RPK acl user create schema-admin        --password 'schema-admin-local-pw'      --mechanism SCRAM-SHA-256
 $RPK acl user create clickhouse-consumer --password 'clickhouse-local-pw'        --mechanism SCRAM-SHA-256
+$RPK acl user create media-service       --password 'media-service-local-pw'     --mechanism SCRAM-SHA-256
 
 echo "=== Waiting for SCRAM credentials to propagate ==="
 max_retries=15; count=0
@@ -88,5 +89,18 @@ $RPK acl create --allow-principal User:clickhouse-consumer \
 $RPK acl create --allow-principal User:clickhouse-consumer \
   --operation Read \
   --group 'clickhouse-consumer' --resource-pattern-type literal $SU_FLAGS
+
+# media-service: Read/Write public.media.* and internal.media.*
+$RPK acl create --allow-principal User:media-service \
+  --operation Read --operation Write --operation Describe \
+  --topic 'public.media.' --resource-pattern-type prefixed $SU_FLAGS
+
+$RPK acl create --allow-principal User:media-service \
+  --operation Read --operation Write --operation Describe \
+  --topic 'internal.media.' --resource-pattern-type prefixed $SU_FLAGS
+
+$RPK acl create --allow-principal User:media-service \
+  --operation Read \
+  --group 'media-service-consumer' --resource-pattern-type literal $SU_FLAGS
 
 echo "=== Redpanda Auth Setup Complete ==="

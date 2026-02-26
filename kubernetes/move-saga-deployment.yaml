@@ -1,7 +1,7 @@
 apiVersion: flink.apache.org/v1beta1
 kind: FlinkDeployment
 metadata:
-  name: ttl-expiry-processor
+  name: move-saga-processor
   namespace: default
 spec:
   image: pyflink-custom:1.18.0
@@ -50,20 +50,22 @@ spec:
               value: "flink-processor"
             - name: KAFKA_SASL_PASSWORD
               value: "flink-processor-local-pw"
+            - name: MOVE_TIMEOUT_SECONDS
+              value: "10"
           volumeMounts:
-            - name: ttl-expiry-scripts
+            - name: move-saga-scripts
               mountPath: /opt/flink/pyflink-scripts
             - name: usrlib-volume
               mountPath: /opt/flink/usrlib
       volumes:
-        - name: ttl-expiry-scripts
+        - name: move-saga-scripts
           configMap:
-            name: ttl-expiry-scripts
+            name: move-saga-scripts
         - name: usrlib-volume
           emptyDir: {}
   job:
     jarURI: local:///opt/flink/opt/flink-python_2.12-1.18.0.jar
     entryClass: "org.apache.flink.client.python.PythonGatewayServer"
-    args: ["-py", "/opt/flink/pyflink-scripts/ttl_expiry_processor.py"]
+    args: ["-py", "/opt/flink/pyflink-scripts/move_saga_processor.py"]
     parallelism: 1
     upgradeMode: stateless
