@@ -47,7 +47,7 @@ spec:
             - name: SCHEMA_REGISTRY_URL
               value: "http://host.docker.internal:8081"
             - name: SUPABASE_DB_JDBC_URL
-              value: "jdbc:postgresql://host.docker.internal:54322/postgres"
+              value: "jdbc:postgresql://host.docker.internal:54322/postgres?tcpKeepAlive=true&connectTimeout=10&socketTimeout=30"
             - name: SUPABASE_DB_USER
               value: "postgres"
             - name: SUPABASE_DB_PASSWORD

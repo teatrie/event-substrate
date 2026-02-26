@@ -144,7 +144,9 @@ tasks:
           internal.platform.unified.events-value \
           public.media.upload.approved-value \
           public.media.upload.rejected-value \
-          public.media.download.rejected-value; do
+          public.media.download.rejected-value \
+          public.media.upload.confirmed-value \
+          internal.media.upload.dead-letter-value; do
           curl -s -o /dev/null -X PUT \
             "http://localhost:8081/config/${subject}" \
             -H "Content-Type: application/json" \
@@ -226,6 +228,10 @@ tasks:
         kubectl create configmap ttl-expiry-scripts
         --from-file=ttl_expiry_processor.py=pyflink_jobs/ttl_expiry_processor.py
         --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap move-saga-scripts
+        --from-file=move_saga_processor.py=pyflink_jobs/move_saga_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
 
   k8s:flink:
     desc: Deploy Flink jobs to Kubernetes
@@ -235,6 +241,7 @@ tasks:
       - kubectl apply -f kubernetes/pyflink-deployment.yaml
       - kubectl apply -f kubernetes/credit-check-deployment.yaml
       - kubectl apply -f kubernetes/ttl-expiry-deployment.yaml
+      - kubectl apply -f kubernetes/move-saga-deployment.yaml
 
   k8s:go-services:
     desc: Build and deploy Go microservices to Kubernetes
@@ -299,6 +306,7 @@ tasks:
       - kubectl delete -f kubernetes/pyflink-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/credit-check-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/ttl-expiry-deployment.yaml --ignore-not-found
+      - kubectl delete -f kubernetes/move-saga-deployment.yaml --ignore-not-found
       - docker compose down
       - supabase stop
       - echo "✅ Shutdown complete."

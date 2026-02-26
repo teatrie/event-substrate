@@ -94,7 +94,7 @@ rpk acl create --allow-principal User:media-service \
   --brokers "$BROKERS" $SU_FLAGS
 
 rpk acl create --allow-principal User:media-service \
-  --operation Read --operation Describe \
+  --operation Read --operation Write --operation Describe \
   --topic 'internal.media.' --resource-pattern-type prefixed \
   --brokers "$BROKERS" $SU_FLAGS
 

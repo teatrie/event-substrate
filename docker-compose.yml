@@ -73,9 +73,11 @@ services:
       MINIO_ROOT_PASSWORD: password
       # Allow browser-direct uploads from the Vite frontend dev server
       MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:5173,http://127.0.0.1:5173"
-      # Webhook notification for media upload events → API Gateway
-      MINIO_NOTIFY_WEBHOOK_ENABLE_GATEWAY: "on"
-      MINIO_NOTIFY_WEBHOOK_ENDPOINT_GATEWAY: "http://host.docker.internal:8080/webhooks/media-upload"
+      # Webhook notifications → Media Service (two prefixes)
+      MINIO_NOTIFY_WEBHOOK_ENABLE_MEDIASERVICE_UPLOADS: "on"
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_MEDIASERVICE_UPLOADS: "http://host.docker.internal:8090/webhooks/media-upload"
+      MINIO_NOTIFY_WEBHOOK_ENABLE_MEDIASERVICE_FILES: "on"
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_MEDIASERVICE_FILES: "http://host.docker.internal:8090/webhooks/file-ready"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

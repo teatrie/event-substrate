@@ -27,7 +27,7 @@ spec:
         - name: MINIO_ENDPOINT
           value: "host.docker.internal:9000"
         - name: MINIO_PUBLIC_ENDPOINT
-          value: "host.docker.internal:9000"
+          value: "localhost:9000"
         - name: MINIO_ACCESS_KEY
           value: "admin"
         - name: MINIO_SECRET_KEY
@@ -44,3 +44,8 @@ spec:
           value: "900"
         - name: DOWNLOAD_URL_EXPIRY
           value: "3600"
+        - name: WEBHOOK_PORT
+          value: "8090"
+        ports:
+        - containerPort: 8090
+          name: webhook
