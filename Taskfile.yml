@@ -448,6 +448,24 @@ tasks:
       - echo "✅ Marquez purged."
 
   # ---------------------------------------------------------------------------
+  # Telemetry
+  # ---------------------------------------------------------------------------
+  telemetry:kube-metrics:install:
+    desc: Install kube-state-metrics for K8s cluster observability
+    cmds:
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+      - helm repo update prometheus-community
+      - >-
+        helm upgrade --install kube-state-metrics prometheus-community/kube-state-metrics
+        --namespace kube-system
+        -f kubernetes/kube-state-metrics-values.yaml
+
+  telemetry:kube-metrics:purge:
+    desc: Uninstall kube-state-metrics
+    cmds:
+      - helm uninstall kube-state-metrics -n kube-system 2>/dev/null || true
+
+  # ---------------------------------------------------------------------------
   # Composite Workflows
   # ---------------------------------------------------------------------------
   init:
@@ -486,6 +504,7 @@ tasks:
       - task: k8s:configmaps
       - task: k8s:flink
       - task: k8s:go-services
+      - task: telemetry:kube-metrics:install
       - task: clickhouse:init
       - task: lineage:start
       - echo "✅ Platform is up and running!"
@@ -516,6 +535,7 @@ tasks:
     cmds:
       - task: shutdown
       - echo "🧹 Destroying all persistent state..."
+      - task: telemetry:kube-metrics:purge
       - docker compose down -v
       - supabase stop --no-backup
       - helm uninstall airflow -n airflow 2>/dev/null || true

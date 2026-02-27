@@ -1,0 +1,18 @@
+# kube-state-metrics Helm values — local development (OrbStack K8s).
+#
+# Chart: prometheus-community/kube-state-metrics
+# Exposed as NodePort 30080 so Prometheus (Docker) can scrape via host.docker.internal.
+# Only collect metrics for resources we care about (reduce noise).
+# -------------------------------------------------------------------
+
+service:
+  type: NodePort
+  nodePort: 30080
+
+# Limit collectors to resources relevant to our platform
+collectors:
+  - pods
+  - deployments
+  - statefulsets
+  - namespaces
+  - nodes
