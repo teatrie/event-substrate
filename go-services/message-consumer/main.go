@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,11 +14,18 @@ import (
 
 	"github.com/hamba/avro/v2"
 	_ "github.com/lib/pq"
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 	"github.com/twmb/franz-go/pkg/sr"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
+
+// Package-level structured logger writing to stderr.
+var log = zerolog.New(os.Stderr).With().Timestamp().Logger()
 
 type Config struct {
 	RedpandaBrokers    string `mapstructure:"REDPANDA_BROKERS"`
@@ -83,28 +90,59 @@ type UserMessage struct {
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
-		log.Fatal("Failed to load config:", err)
+		log.Fatal().Err(err).Msg("Failed to load config")
 	}
 
 	topic := "public.user.message.events"
 	consumerGroup := "go-message-consumer"
 
-	log.Printf("Starting Message Consumer. Topic: %s", topic)
+	log.Info().Str("topic", topic).Msg("Starting Message Consumer")
+
+	// OTel initialisation
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	otelShutdown, err := initOTel(ctx, "message-consumer")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialise OTel")
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Error().Err(err).Msg("OTel shutdown error")
+		}
+	}()
+
+	// Kafka metrics
+	meter := otel.Meter("message-consumer")
+	messagesTotal, err := meter.Int64Counter(
+		"kafka.consumer.messages.total",
+		metric.WithDescription("Total Kafka messages consumed"),
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create messages counter")
+	}
+	errorsTotal, err := meter.Int64Counter(
+		"kafka.consumer.errors.total",
+		metric.WithDescription("Total Kafka consumer processing errors"),
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create errors counter")
+	}
 
 	// DB Setup
 	db, err := sql.Open("postgres", cfg.SupabaseDBURL)
 	if err != nil {
-		log.Fatal("Failed to open db:", err)
+		log.Fatal().Err(err).Msg("Failed to open db")
 	}
 	defer db.Close()
 	if err := db.Ping(); err != nil {
-		log.Fatal("Failed to ping db:", err)
+		log.Fatal().Err(err).Msg("Failed to ping db")
 	}
 
 	// SR Client Setup
 	client, err := sr.NewClient(sr.URLs(cfg.SchemaRegistryURL))
 	if err != nil {
-		log.Fatal("SR client:", err)
+		log.Fatal().Err(err).Msg("SR client init failed")
 	}
 	srClient = client
 
@@ -119,24 +157,35 @@ func main() {
 		switch cfg.KafkaSASLMechanism {
 		case "SCRAM-SHA-256":
 			kgoOpts = append(kgoOpts, kgo.SASL(scram.Auth{User: cfg.KafkaSASLUsername, Pass: cfg.KafkaSASLPassword}.AsSha256Mechanism()))
-			log.Printf("SASL/SCRAM-SHA-256 enabled for Kafka user '%s'", cfg.KafkaSASLUsername)
+			log.Info().Str("user", cfg.KafkaSASLUsername).Msg("SASL/SCRAM-SHA-256 enabled for Kafka")
 		case "SCRAM-SHA-512":
 			kgoOpts = append(kgoOpts, kgo.SASL(scram.Auth{User: cfg.KafkaSASLUsername, Pass: cfg.KafkaSASLPassword}.AsSha512Mechanism()))
-			log.Printf("SASL/SCRAM-SHA-512 enabled for Kafka user '%s'", cfg.KafkaSASLUsername)
+			log.Info().Str("user", cfg.KafkaSASLUsername).Msg("SASL/SCRAM-SHA-512 enabled for Kafka")
 		default:
-			log.Printf("WARNING: Unknown KAFKA_SASL_MECHANISM '%s', connecting without SASL", cfg.KafkaSASLMechanism)
+			log.Warn().Str("mechanism", cfg.KafkaSASLMechanism).Msg("Unknown KAFKA_SASL_MECHANISM, connecting without SASL")
 		}
 	}
 	cl, err := kgo.NewClient(kgoOpts...)
 	if err != nil {
-		log.Fatal("Kafka client:", err)
+		log.Fatal().Err(err).Msg("Kafka client init failed")
 	}
 	defer cl.Close()
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
+	// HTTP server for health endpoints
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", &healthHandler{})
+	mux.Handle("/readyz", &readyzHandler{ping: func() error {
+		return db.PingContext(ctx)
+	}})
 
-	log.Println("Ready & processing records...")
+	go func() {
+		log.Info().Str("addr", ":8091").Msg("Health HTTP server listening")
+		if err := http.ListenAndServe(":8091", mux); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("Health HTTP server error")
+		}
+	}()
+
+	log.Info().Msg("Ready & processing records...")
 
 	for {
 		fetches := cl.PollFetches(ctx)
@@ -144,17 +193,21 @@ func main() {
 			break
 		}
 		if errs := fetches.Errors(); len(errs) > 0 {
-			log.Println("Poll errors:", errs)
+			log.Error().Interface("errors", errs).Msg("Poll errors")
 			continue
 		}
 
 		fetches.EachRecord(func(rec *kgo.Record) {
+			topicAttr := attribute.String("topic", rec.Topic)
+
 			if len(rec.Value) < 5 {
-				log.Println("Invalid payload length")
+				log.Warn().Msg("Invalid payload length")
+				errorsTotal.Add(ctx, 1, metric.WithAttributes(topicAttr))
 				return
 			}
 			if rec.Value[0] != 0 {
-				log.Println("Invalid magic byte")
+				log.Warn().Msg("Invalid magic byte")
+				errorsTotal.Add(ctx, 1, metric.WithAttributes(topicAttr))
 				return
 			}
 
@@ -163,13 +216,15 @@ func main() {
 
 			schema, err := getAvroSchema(ctx, schemaID)
 			if err != nil {
-				log.Printf("Schema fetch err: %v", err)
+				log.Error().Err(err).Msg("Schema fetch error")
+				errorsTotal.Add(ctx, 1, metric.WithAttributes(topicAttr))
 				return
 			}
 
 			var msg UserMessage
 			if err := avro.Unmarshal(schema, avroBytes, &msg); err != nil {
-				log.Printf("Unmarshal err: %v", err)
+				log.Error().Err(err).Msg("Unmarshal error")
+				errorsTotal.Add(ctx, 1, metric.WithAttributes(topicAttr))
 				return
 			}
 
@@ -191,10 +246,18 @@ func main() {
 
 			notifQuery := `INSERT INTO public.user_notifications (user_id, event_type, payload, event_time, visibility, recipient_id) VALUES ($1, $2, $3, $4, $5, $6)`
 			if _, err := db.ExecContext(ctx, notifQuery, msg.UserID, "user.message", string(notifPayload), msg.Timestamp, visibility, recipientID); err != nil {
-				log.Fatalf("Fatal DB Insert error: %v. Crashing to prevent uncommitted message loss.", err)
+				log.Fatal().Err(err).Msg("Fatal DB Insert error — crashing to prevent uncommitted message loss")
 			}
 
-			log.Printf("Inserted %s message from %s (UID: %s)", visibility, msg.Email, msg.UserID)
+			messagesTotal.Add(ctx, 1, metric.WithAttributes(
+				topicAttr,
+				attribute.String("status", "success"),
+			))
+			log.Info().
+				Str("visibility", visibility).
+				Str("email", msg.Email).
+				Str("user_id", msg.UserID).
+				Msg("Inserted message")
 		})
 	}
 }
