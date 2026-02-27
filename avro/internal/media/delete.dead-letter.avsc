@@ -7,6 +7,8 @@
     {"name": "user_id", "type": "string", "doc": "The unique identifier of the deleting user."},
     {"name": "file_path", "type": "string", "doc": "Object storage path of the orphaned MinIO object."},
     {"name": "file_name", "type": "string", "doc": "Original file name."},
+    {"name": "media_type", "type": "string", "doc": "MIME type (e.g. video/mp4, image/png, audio/mpeg)."},
+    {"name": "file_size", "type": "long", "doc": "File size in bytes."},
     {"name": "request_id", "type": "string", "doc": "Correlation ID from the original delete intent."},
     {"name": "retry_count", "type": "int", "doc": "Total number of retries attempted before dead-lettering."},
     {"name": "failure_reason", "type": "string", "doc": "Human-readable reason (e.g. 'max retries exceeded')."},
