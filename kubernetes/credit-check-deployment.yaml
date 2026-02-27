@@ -18,11 +18,11 @@ spec:
   jobManager:
     resource:
       memory: "1024m"
-      cpu: 1
+      cpu: 0.25
   taskManager:
     resource:
       memory: "1024m"
-      cpu: 1
+      cpu: 0.5
   podTemplate:
     spec:
       initContainers:
