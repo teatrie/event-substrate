@@ -222,3 +222,99 @@ groups:
           description: "Redpanda broker disk usage has exceeded 80%. Consider increasing storage or adjusting retention policies."
         labels:
           severity: warning
+
+      # K8s pod crash loop — fires if any pod is restarting repeatedly
+      - uid: k8s-pod-crashloop
+        title: "K8s Pod CrashLoopBackOff"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                rate(kube_pod_container_status_restarts_total[5m]) > 0
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 3m
+        annotations:
+          summary: "Kubernetes pod is crash-looping"
+          description: "A pod container has been restarting repeatedly over the last 5 minutes. Check pod logs: kubectl logs <pod> -n <namespace>"
+        labels:
+          severity: warning
+
+      # K8s pod stuck pending — fires if any pod is pending for > 5 minutes
+      - uid: k8s-pod-pending
+        title: "K8s Pod Pending"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                kube_pod_status_phase{phase="Pending"} > 0
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Kubernetes pod is stuck in Pending state"
+          description: "A pod has been in Pending state for more than 5 minutes. Check node resources and scheduling constraints: kubectl describe pod <pod> -n <namespace>"
+        labels:
+          severity: warning
+
+      # Airflow scheduler down — fires if scheduler heartbeat is absent
+      - uid: airflow-scheduler-down
+        title: "Airflow Scheduler Down"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                absent(airflow_scheduler_heartbeat_total)
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Airflow scheduler is not reporting heartbeats"
+          description: "No airflow_scheduler_heartbeat metric detected for 2 minutes. Check scheduler pod: kubectl get pods -n airflow"
+        labels:
+          severity: critical
+
+      # Airflow DAG failure rate — fires if DAG runs are failing
+      - uid: airflow-dag-failure
+        title: "Airflow DAG Failure Rate"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                rate(airflow_dagrun_duration_total{state="failed"}[5m]) > 0
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Airflow DAG runs are failing"
+          description: "One or more Airflow DAG runs have failed in the last 5 minutes. Check Airflow UI: task airflow:ui → http://localhost:8280"
+        labels:
+          severity: warning
