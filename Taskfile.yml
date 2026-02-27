@@ -476,3 +476,8 @@ tasks:
     cmds:
       - rm -rf .task/
       - echo "✅ Build cache cleared."
+
+  reset:browser:
+    desc: Clear browser cache (localStorage, sessionStorage, cookies) for localhost:5173
+    cmds:
+      - node scripts/reset-browser-cache.mjs
