@@ -1,17 +1,24 @@
 # syntax=docker/dockerfile:1
-# Dockerfile.spark — Multi-stage build for Spark jobs with Iceberg + OpenLineage
+# Dockerfile.spark.base — Base and test stages for all Spark jobs
 #
-# Stages:
-#   base        — Spark 4.0.2, downloaded JARs, base Python deps (shared layer)
-#   production  — copies pyspark_apps/ (tests excluded via --exclude), runs as spark user 185
-#   test        — copies full pyspark_apps/ including tests, runs pytest
+# This file builds two reusable images:
+#   base   — Spark 4.0.2, downloaded JARs, base Python deps, shared pyspark_apps/common/
+#   test   — extends base with pytest and all pyspark_apps/ for running the test suite
 #
-# Build:
-#   docker build -f Dockerfile.spark --target production -t pyspark/identity-daily-login-aggregates:latest .
-#   docker build -f Dockerfile.spark --target test -t pyspark/identity-daily-login-aggregates:test .
+# Per-app production images live in pyspark_apps/<domain>/<app>/Dockerfile and
+# FROM spark-base:latest built from this file.
+#
+# Build the base image (from repo root):
+#   docker build -f Dockerfile.spark.base --target base -t spark-base:latest .
+#
+# Build the test image (from repo root):
+#   docker build -f Dockerfile.spark.base --target test -t spark-base:test .
+#
+# Run tests:
+#   docker run --rm spark-base:test
 
 # -------------------------------------------------------------------
-# Base: Spark 4.0.2 + Python3, JARs, base Python deps
+# Base: Spark 4.0.2 + Python3, JARs, base Python deps, shared common/
 # -------------------------------------------------------------------
 FROM apache/spark:4.0.2-python3 AS base
 
@@ -36,17 +43,8 @@ ENV PYTHONPATH="/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip"
 # Install additional Python dependencies (pyspark already in image, defopt for CLI)
 RUN pip install --no-cache-dir 'defopt>=7.0'
 
-# -------------------------------------------------------------------
-# Production: job code only — tests excluded by BuildKit --exclude flags
-# (patterns mirror pyspark_apps/.dockerignore)
-# -------------------------------------------------------------------
-FROM base AS production
-
-COPY --exclude=**/tests/** --exclude=**/__pycache__/** --exclude=**/*.pyc \
-    pyspark_apps/ /opt/spark/work-dir/pyspark_apps/
-
-# Run as the spark user (uid 185) per official image convention
-USER 185
+# Copy shared common code into the base layer so per-app images inherit it
+COPY pyspark_apps/common/ /opt/spark/work-dir/pyspark_apps/common/
 
 # -------------------------------------------------------------------
 # Test: full source including tests — runs pytest
