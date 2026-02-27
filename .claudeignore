@@ -15,12 +15,17 @@ vendor/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 .pytest_cache/
 .coverage
 htmlcov/
 # Block local Flink checkpoints and savepoints
 /flink-checkpoints/
 /flink-savepoints/
+# Spark local metastore (created by PySpark tests)
+derby.log
+metastore_db/
+spark-warehouse/
 
 # 3. Frontend & Node Modules
 node_modules/

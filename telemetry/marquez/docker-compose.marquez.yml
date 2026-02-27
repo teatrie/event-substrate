@@ -1,0 +1,48 @@
+services:
+  marquez-db:
+    image: postgres:15-alpine
+    container_name: marquez-db
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    ports:
+      - "5433:5432"
+    volumes:
+      - marquez_db_data:/var/lib/postgresql/data
+
+  marquez:
+    image: marquezproject/marquez:0.49.0
+    container_name: marquez
+    depends_on:
+      - marquez-db
+    environment:
+      MARQUEZ_CONFIG: /etc/marquez/config.yml
+      MARQUEZ_PORT: 5050
+      MARQUEZ_ADMIN_PORT: 5051
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: marquez
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+    volumes:
+      - ./config.yml:/etc/marquez/config.yml:ro
+    ports:
+      - "5050:5050"
+      - "5051:5051"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.49.0
+    container_name: marquez-web
+    depends_on:
+      - marquez
+    environment:
+      MARQUEZ_HOST: marquez
+      MARQUEZ_PORT: 5050
+    ports:
+      - "3001:3000"
+
+volumes:
+  marquez_db_data:

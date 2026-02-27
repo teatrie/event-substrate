@@ -1,6 +1,6 @@
 # Airflow Helm chart values — production (GKE / EKS).
 #
-# Chart: apache-airflow/airflow 1.16.0 (Airflow 2.10.5)
+# Chart: apache-airflow/airflow 1.19.0 (Airflow 3.1.7)
 # Executor: KubernetesExecutor
 # DAGs: git-sync sidecar (polls repo subpath)
 # DB: external PostgreSQL (Cloud SQL / RDS)
@@ -34,6 +34,16 @@ scheduler:
     limits:
       cpu: "1"
       memory: 2Gi
+
+# -- DAG Processor (Airflow 3.x: parses DAG files, separate from scheduler) --
+dagProcessor:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
 
 # -- Triggerer ----------------------------------------------------------
 triggerer:
