@@ -78,6 +78,8 @@ services:
       MINIO_NOTIFY_WEBHOOK_ENDPOINT_MEDIASERVICE_UPLOADS: "http://host.docker.internal:8090/webhooks/media-upload"
       MINIO_NOTIFY_WEBHOOK_ENABLE_MEDIASERVICE_FILES: "on"
       MINIO_NOTIFY_WEBHOOK_ENDPOINT_MEDIASERVICE_FILES: "http://host.docker.internal:8090/webhooks/file-ready"
+      # Enable Prometheus metrics without authentication
+      MINIO_PROMETHEUS_AUTH_TYPE: public
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
