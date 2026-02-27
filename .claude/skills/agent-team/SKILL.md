@@ -43,7 +43,7 @@ Based on the systems analysis, organize work into **waves** of parallel teams:
 - A domain that **consumes output from another domain** must be in a later wave (sequential).
 - **Test domains are mandatory and always in the final implementation wave** (they require all code complete):
   - **E2E pipeline tests** (`tests/e2e/`): Backend end-to-end tests validating the full event flow (API → Kafka → Flink → DB).
-  - **Browser integration tests** (Playwright): If the feature has any user-facing UI changes, Playwright tests must exercise the actual browser UX — DOM states, loading/waiting indicators, notification rendering, error handling, and the complete user journey. Vitest unit tests with mocked fetch are not a substitute.
+  - **Browser integration tests** (Playwright): If the feature has any user-facing UI changes, Playwright tests must exercise the actual browser UX with real backend data flowing through. Tests must drive the full user journey — signup, wait for Realtime-driven UI updates (credits, notifications), trigger actions (upload, download, delete), and assert on durable outcomes (file appears/disappears in media browser, credit count changes). **Anti-patterns to avoid:** asserting on source code strings, checking only static DOM structure without data, or testing with mocked fetch — none of these catch Realtime integration bugs or notification matching issues.
 - Documentation is always last.
 
 **Team structure:**

@@ -92,6 +92,85 @@ test.describe('Auth view', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Signup → Credits Flow (end-to-end Realtime)
+// ---------------------------------------------------------------------------
+test.describe('Signup credits flow', () => {
+    test('signup grants credits and enables upload', async ({ page }) => {
+        const email = uniqueEmail()
+        await page.goto('/')
+
+        // Sign up
+        await page.click('#toggle-mode')
+        await page.fill('#email', email)
+        await page.fill('#password', TEST_PASSWORD)
+        await page.click('#submit-btn')
+
+        // Wait for home view
+        await expect(page.locator('#home-view')).toBeVisible({ timeout: 15_000 })
+
+        // Wait for credit.balance_changed to arrive via Realtime and update the badge
+        const creditCount = page.locator('#credit-count')
+        await expect(creditCount).toHaveText('2', { timeout: 15_000 })
+
+        // Credit badge should not have the "empty" class
+        await expect(page.locator('#credit-badge')).not.toHaveClass(/empty/)
+
+        // Upload status should not show the no-credits message
+        const uploadStatus = page.locator('#upload-status')
+        await expect(uploadStatus).not.toContainText('No credits remaining')
+    })
+})
+
+// ---------------------------------------------------------------------------
+// Full Upload → Download → Delete Journey (end-to-end through UI)
+// ---------------------------------------------------------------------------
+test.describe('Upload journey', () => {
+    test('upload file, see it in media browser, download, delete', async ({ page }) => {
+        test.setTimeout(90_000)
+
+        const email = uniqueEmail()
+        await page.goto('/')
+
+        // Sign up
+        await page.click('#toggle-mode')
+        await page.fill('#email', email)
+        await page.fill('#password', TEST_PASSWORD)
+        await page.click('#submit-btn')
+        await expect(page.locator('#home-view')).toBeVisible({ timeout: 15_000 })
+
+        // Wait for credits via Realtime
+        await expect(page.locator('#credit-count')).toHaveText('2', { timeout: 15_000 })
+
+        // Upload a test file
+        const fileName = 'e2e-journey-test.png'
+        await page.locator('#file-input').setInputFiles({
+            name: fileName,
+            mimeType: 'image/png',
+            buffer: Buffer.from(`test-${Date.now()}`),
+        })
+        await expect(page.locator('#upload-label')).toContainText(fileName)
+        await page.click('#upload-btn')
+
+        // Wait for file to appear in media browser (durable outcome of the full pipeline)
+        const fileCard = page.locator('.media-file-card', { hasText: fileName })
+        await expect(fileCard).toBeVisible({ timeout: 60_000 })
+
+        // Credit should be deducted (2 → 1)
+        await expect(page.locator('#credit-count')).toHaveText('1', { timeout: 15_000 })
+
+        // Delete the file
+        await fileCard.locator('.btn-delete').click()
+        await expect(page.locator('#delete-modal')).toBeVisible()
+        await expect(page.locator('#delete-modal-filename')).toHaveText(fileName)
+        await page.fill('#delete-confirm-input', 'delete')
+        await page.click('#delete-confirm-btn')
+
+        // File should disappear from media browser
+        await expect(fileCard).not.toBeVisible({ timeout: 30_000 })
+    })
+})
+
+// ---------------------------------------------------------------------------
 // Authenticated Home View — sign up one user, then log in for each test
 // ---------------------------------------------------------------------------
 test.describe('Home view (authenticated)', () => {
