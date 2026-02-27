@@ -16,11 +16,16 @@ To maintain the project's goal of **Multicloud Portability**, we will utilize a 
     *   **Resource Efficiency**: Native K8s scheduling and executor scaling (ephemeral pods).
     *   **Unity**: Shares the same VPC, IAM/Workload Identity, and Namespace as the Go microservices and Flink jobs.
 
-### B. Orchestration: Apache Airflow
-*   **Deployment**: Deploy via **Helm** (Official Apache Airflow chart) or **Astronomer Cosmos** for easier dbt integration.
+### B. Orchestration: Apache Airflow ✅ IMPLEMENTED
+*   **Status**: Skeleton deployed — Helm chart 1.16.0 (Airflow 2.10.5) with KubernetesExecutor, `hello_world` validation DAG.
+*   **Deployment**: Self-managed via **Helm** (Official Apache Airflow chart 1.16.0) on K8s.
 *   **Executor**: **KubernetesExecutor**.
     *   Each Airflow task runs in its own isolated pod.
     *   Highly scalable and prevents a single heavy task from crashing the scheduler.
+*   **Local DAGs**: hostPath PV/PVC mounts `airflow/dags/` into scheduler and executor pods (OrbStack maps macOS at `/mnt/mac`).
+*   **Production DAGs**: git-sync sidecar polls `airflow/dags/` subpath (configured in `airflow/values-prod.yaml`).
+*   **Access**: `task airflow:ui` → `http://localhost:8280` (admin/admin).
+*   **Resources**: ~600m CPU, ~1.3Gi RAM total (fits alongside Flink on 8-core Mac).
 *   **Responsibility**:
     *   Triggering Spark jobs for Daily/Weekly aggregation.
     *   Managing Data Quality (DQ) checks.
@@ -90,7 +95,7 @@ For the Event Substrate, we must choose between Cloud-Managed Airflow and Self-M
 
 ## 6. Next Steps for Implementation
 1. **Spark Operator POC**: Install the Spark on K8s operator on the local OrbStack cluster.
-2. **Airflow Helm Setup**: Define the Airflow Helm values in Pulumi for a `KubernetesExecutor` deployment.
+2. ~~**Airflow Helm Setup**~~: ✅ Done — Helm chart 1.16.0 deployed with KubernetesExecutor, hostPath DAG mount, and `hello_world` validation DAG. See `airflow/` directory.
 3. **Unified Iceberg Access**: Ensure Spark, Flink, and Trino all share the same **Polaris/Nessie** catalog.
 4. **Airflow Base Image**: Create a custom Airflow Docker image that includes the `kubectl` and `spark-submit` binaries.
 5. **Governance Integration**: Ensure Spark jobs follow **Apache Ranger** policies for row/column level redaction.

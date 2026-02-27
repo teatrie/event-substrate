@@ -1,0 +1,91 @@
+# Airflow Helm chart values — production (GKE / EKS).
+#
+# Chart: apache-airflow/airflow 1.16.0 (Airflow 2.10.5)
+# Executor: KubernetesExecutor
+# DAGs: git-sync sidecar (polls repo subpath)
+# DB: external PostgreSQL (Cloud SQL / RDS)
+# Auth: RBAC via environment-specific IdP
+# HA: 2 schedulers, 2 webservers
+# -------------------------------------------------------------------
+
+# -- Executor ----------------------------------------------------------
+executor: KubernetesExecutor
+
+# -- Web server (HA) ---------------------------------------------------
+webserver:
+  replicas: 2
+  defaultUser:
+    enabled: false  # use IdP / RBAC in production
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# -- Scheduler (HA) ----------------------------------------------------
+scheduler:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+# -- Triggerer ----------------------------------------------------------
+triggerer:
+  enabled: true
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# -- External PostgreSQL ------------------------------------------------
+postgresql:
+  enabled: false    # use Cloud SQL / RDS
+
+data:
+  metadataConnection:
+    user: airflow
+    pass: ""        # inject via K8s Secret
+    protocol: postgresql
+    host: ""        # Cloud SQL proxy / RDS endpoint
+    port: 5432
+    db: airflow
+    sslmode: require
+
+# -- Redis (not needed for KubernetesExecutor) -------------------------
+redis:
+  enabled: false
+
+# -- StatsD (enable for production metrics) ----------------------------
+statsd:
+  enabled: true
+
+# -- DAG sync (git-sync sidecar) ---------------------------------------
+dags:
+  persistence:
+    enabled: false
+  gitSync:
+    enabled: true
+    repo: ""          # e.g., https://github.com/org/event-substrate.git
+    branch: main
+    subPath: airflow/dags
+    wait: 60          # poll interval in seconds
+
+# -- Secret key (inject via K8s Secret in production) ------------------
+webserverSecretKey: ""  # override via --set or external secret
+
+# -- Config overrides --------------------------------------------------
+config:
+  core:
+    load_examples: "False"
+  webserver:
+    expose_config: "False"
+    warn_deployment_exposure: "True"

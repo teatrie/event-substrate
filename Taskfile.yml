@@ -255,6 +255,78 @@ tasks:
       - kubectl apply -f kubernetes/go-services/
 
   # ---------------------------------------------------------------------------
+  # Airflow
+  # ---------------------------------------------------------------------------
+  airflow:install:
+    desc: Install Airflow on K8s via Helm (namespace, PV/PVC, chart)
+    cmds:
+      - helm repo add apache-airflow https://airflow.apache.org || true
+      - helm repo update apache-airflow
+      - kubectl create namespace airflow --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f airflow/pv-local.yaml
+      - >-
+        helm install airflow apache-airflow/airflow
+        --namespace airflow
+        --version 1.16.0
+        -f airflow/values-local.yaml
+        --timeout 10m
+      - echo "✅ Airflow installed. Run 'task airflow:ui' to access the web UI."
+
+  airflow:upgrade:
+    desc: Upgrade Airflow Helm release with current values
+    cmds:
+      - >-
+        helm upgrade airflow apache-airflow/airflow
+        --namespace airflow
+        --version 1.16.0
+        -f airflow/values-local.yaml
+        --timeout 10m
+      - echo "✅ Airflow upgraded."
+
+  airflow:ui:
+    desc: Port-forward Airflow webserver to localhost:8280
+    cmds:
+      - echo "🌐 Airflow UI at http://localhost:8280 (admin/admin)"
+      - kubectl port-forward svc/airflow-webserver 8280:8080 -n airflow
+
+  airflow:status:
+    desc: Show Airflow pod status
+    cmds:
+      - kubectl get pods -n airflow 2>/dev/null || echo "Airflow namespace not found"
+
+  airflow:logs:scheduler:
+    desc: Tail Airflow scheduler logs
+    cmds:
+      - kubectl logs -f deployment/airflow-scheduler -n airflow
+
+  airflow:logs:webserver:
+    desc: Tail Airflow webserver logs
+    cmds:
+      - kubectl logs -f deployment/airflow-webserver -n airflow
+
+  airflow:start:
+    desc: Scale Airflow deployments back to 1
+    cmds:
+      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=1 2>/dev/null || true
+      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=1 2>/dev/null || true
+      - echo "✅ Airflow scaled up."
+
+  airflow:shutdown:
+    desc: Scale Airflow deployments to 0
+    cmds:
+      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=0 2>/dev/null || true
+      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
+      - echo "✅ Airflow scaled down."
+
+  airflow:purge:
+    desc: Uninstall Airflow — Helm release, PV/PVC, namespace
+    cmds:
+      - helm uninstall airflow -n airflow 2>/dev/null || true
+      - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
+      - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
+      - echo "✅ Airflow purged."
+
+  # ---------------------------------------------------------------------------
   # Composite Workflows
   # ---------------------------------------------------------------------------
   init:
@@ -310,6 +382,8 @@ tasks:
       - kubectl delete -f kubernetes/move-saga-deployment.yaml --ignore-not-found
       - docker compose down
       - supabase stop
+      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=0 2>/dev/null || true
+      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
       - echo "✅ Shutdown complete."
 
   purge:
@@ -319,6 +393,9 @@ tasks:
       - echo "🧹 Destroying all persistent state..."
       - docker compose down -v
       - supabase stop --no-backup
+      - helm uninstall airflow -n airflow 2>/dev/null || true
+      - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
+      - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
       - task: clean
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
@@ -455,6 +532,9 @@ tasks:
       - echo ""
       - echo "--- Kubernetes ---"
       - kubectl get pods -A --no-headers 2>/dev/null || echo "No K8s pods found"
+      - echo ""
+      - echo "--- Airflow ---"
+      - kubectl get pods -n airflow 2>/dev/null || echo "Airflow not installed"
 
   frontend:
     desc: Install dependencies and start the Vite frontend dev server
