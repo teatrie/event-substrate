@@ -64,6 +64,12 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** Hardcoding individual filenames in Dockerfiles (e.g., `COPY main.go ./`) causes build failures when new source files are added. The error only surfaces at Docker build time — local builds succeed because the compiler sees all files in the directory.
 **Decision:** Use glob patterns (`COPY *.go ./`, `COPY src/ ./src/`) in Dockerfiles. When adding any new source file to a service, verify its Dockerfile copies it into the build context.
 
+### 4. `supabase stop` Preserves Auth State — Use `--no-backup` for Full Purge
+
+**Observation:** `task purge` ran `supabase db reset` after `supabase stop`, which failed silently (`|| true`). Even when the public schema was wiped, `auth.users` survived because GoTrue manages auth state independently of the public schema. The browser's JWT remained valid against the surviving auth user, causing stale sessions to persist across purge cycles.
+
+**Decision:** Use `supabase stop --no-backup` to delete all data volumes (including GoTrue's auth state). A stale JWT against a wiped DB should also be caught client-side via `getUser()` validation — if the server returns an error, auto-sign out. The `task purge` sequence is: `supabase stop --no-backup` → `supabase start` → `supabase db reset`.
+
 ---
 
 ## 🔐 Kafka Authentication (SASL/SCRAM)
@@ -261,6 +267,28 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** The E2E test produced a message to `internal.media.delete.retry` using the `flink-processor` SASL identity (which has topic produce/consume ACLs), then tried `rpk group describe media-service-consumer` with the same identity. This failed with `GROUP_AUTHORIZATION_FAILED` — the `flink-processor` user has topic-level ACLs but not group-level ACLs (`DescribeGroup`).
 
 **Decision:** Use the `superuser` identity for administrative rpk commands like `rpk group describe` in E2E tests. Topic-level operations (produce, consume, list) and group-level operations (describe, list) are separate ACL categories in Kafka/Redpanda. A service identity's ACLs are scoped to its operational needs — `flink-processor` needs topic read/write but never needs to describe consumer groups.
+
+### 27. Dead-Letter and Retry Schemas Must Mirror Full Event Payload
+
+**Observation:** The Go delete handler produces `media_type` and `file_size` in the dead-letter event map, but the Avro schema for the DLQ topic omitted those fields. Avro serialization silently drops fields not present in the schema, so the DLQ Iceberg table lost data needed for future Spark orphan cleanup jobs.
+
+**Decision:** Every DLQ/retry schema must carry the full payload from the original event. Schema completeness should be verified against the *producing* code, not just the consuming code. When adding a new field to an event producer, grep for all schemas that serialize from the same event map and add the field there too.
+
+---
+
+## 🖥️ Frontend Integration
+
+### 28. Notification Waiter Must Match on Post-Saga Paths, Not Pre-Saga Paths
+
+**Observation:** The frontend `notificationWaiter` was keyed on `uploads/...` (the path from `upload_ready`), but `upload_completed` carries `file_path: files/...` (post-move saga). The waiter timed out because the paths didn't match, even though the upload succeeded end-to-end.
+
+**Decision:** When a saga transforms state (e.g., moves a file from `uploads/` to `files/`), the frontend waiter must register under the *final* path. Use multi-key registration (`[permanentPath, originalPath]`) to also match error notifications that reference the original path (e.g., `upload_expired` still carries `uploads/...`).
+
+### 29. Realtime Event Handlers Must Refresh Dependent UI State
+
+**Observation:** `credit.balance_changed` arrived via Realtime and appeared in Live Events, but the credit badge in the header didn't update because the handler only called `addNotification()`, not `refreshCredits()`.
+
+**Decision:** When a Realtime notification implies a state change in a different UI component (credits, media browser), the handler must trigger a refresh of that component. Don't assume the user will reload. Map each notification `event_type` to its side effects: `credit.balance_changed` → `refreshCredits()`, `upload_completed` / `file_deleted` → `refreshMediaBrowser()`.
 
 ---
 
