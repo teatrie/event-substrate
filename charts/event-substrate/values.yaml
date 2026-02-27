@@ -1,0 +1,160 @@
+global:
+  imagePullPolicy: Never          # local dev default (OrbStack shares Docker daemon)
+  imagePullSecrets: []
+
+goServices:
+  namespace: go-microservices
+
+  apiGateway:
+    enabled: true
+    replicas: 1
+    image:
+      repository: event-substrate-api-gateway
+      tag: latest
+    port: 8080
+    env:
+      REDPANDA_BROKERS: "host.docker.internal:9092"
+      SCHEMA_REGISTRY_URL: "http://host.docker.internal:8081"
+      WEBHOOK_SECRET: "super-secret-webhook-key"
+      KAFKA_SASL_MECHANISM: "SCRAM-SHA-256"
+      KAFKA_SASL_USERNAME: "api-gateway"
+      KAFKA_SASL_PASSWORD: "api-gateway-local-pw"
+      # Supabase JWT verification (ES256 via JWKS, HS256 via secret as fallback)
+      SUPABASE_JWKS_URL: "http://host.docker.internal:54321/auth/v1/.well-known/jwks.json"
+      SUPABASE_JWT_SECRET: "super-secret-jwt-token-with-at-least-32-characters-long"
+      # Upload handler: MinIO + Postgres for credit checks and presigned URLs
+      SUPABASE_DB_URL: "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+      MINIO_ENDPOINT: "host.docker.internal:9000"
+      MINIO_ACCESS_KEY: "admin"
+      MINIO_SECRET_KEY: "password"
+      MINIO_BUCKET: "media-uploads"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://host.docker.internal:4317"
+    routes:
+      webhookRoutes:
+        login: public.identity.login.events
+        signup: public.identity.signup.events
+        signout: public.identity.signout.events
+      externalRoutes:
+        message: public.user.message.events
+
+  messageConsumer:
+    enabled: true
+    replicas: 1
+    image:
+      repository: event-substrate-message-consumer
+      tag: latest
+    port: 8091
+    env:
+      REDPANDA_BROKERS: "host.docker.internal:9092"
+      SCHEMA_REGISTRY_URL: "http://host.docker.internal:8081"
+      SUPABASE_DB_URL: "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+      KAFKA_SASL_MECHANISM: "SCRAM-SHA-256"
+      KAFKA_SASL_USERNAME: "message-consumer"
+      KAFKA_SASL_PASSWORD: "message-consumer-local-pw"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://host.docker.internal:4317"
+    keda:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 15
+      bootstrapServers: "host.docker.internal:9092"
+      consumerGroup: "go-message-consumer"
+      topic: "public.user.message.events"
+      lagThreshold: "5"
+
+  mediaService:
+    enabled: true
+    replicas: 1
+    image:
+      repository: event-substrate-media-service
+      tag: latest
+    port: 8090
+    env:
+      REDPANDA_BROKERS: "host.docker.internal:9092"
+      SCHEMA_REGISTRY_URL: "http://host.docker.internal:8081"
+      SUPABASE_DB_URL: "postgres://postgres:postgres@host.docker.internal:54322/postgres?sslmode=disable"
+      MINIO_ENDPOINT: "host.docker.internal:9000"
+      MINIO_PUBLIC_ENDPOINT: "localhost:9000"
+      MINIO_ACCESS_KEY: "admin"
+      MINIO_SECRET_KEY: "password"
+      MINIO_BUCKET: "media-uploads"
+      KAFKA_SASL_MECHANISM: "SCRAM-SHA-256"
+      KAFKA_SASL_USERNAME: "media-service"
+      KAFKA_SASL_PASSWORD: "media-service-local-pw"
+      UPLOAD_URL_EXPIRY: "900"
+      DOWNLOAD_URL_EXPIRY: "3600"
+      WEBHOOK_PORT: "8090"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://host.docker.internal:4317"
+
+spark:
+  namespace: spark-apps
+  serviceAccount: spark
+
+  identityDailyLoginAggregates:
+    enabled: true
+    image:
+      repository: pyspark/identity-daily-login-aggregates
+      tag: latest
+    sparkVersion: "4.0.2"
+    driver:
+      cores: 1
+      memory: "1g"
+    executor:
+      cores: 1
+      instances: 1
+      memory: "1g"
+    scratchSizeLimit: "5Gi"
+    arguments:
+      - "--catalog"
+      - "nessie"
+      - "--login-table"
+      - "nessie.redpanda.public_identity_login_events"
+      - "--signup-table"
+      - "nessie.redpanda.public_identity_signup_events"
+      - "--output-table"
+      - "nessie.silver.identity_daily_login_aggregates"
+      - "--dt"
+      - "2024-01-01"    # Airflow replaces with {{ ds }}
+    # All sparkConf entries (Iceberg catalog, S3A filesystem, OpenLineage, shuffle tuning, AQE)
+    # NOTE: This duplicates config from common/session.py. When the Spark Operator
+    # submits this job, sparkConf values are passed as --conf flags and take
+    # precedence over programmatic config. session.py remains the source of truth
+    # for non-Operator paths (unit tests, KubernetesPodOperator via Airflow DAG).
+    sparkConf:
+      # Iceberg catalog (REST protocol via Nessie)
+      "spark.sql.catalog.nessie": "org.apache.iceberg.spark.SparkCatalog"
+      "spark.sql.catalog.nessie.type": "rest"
+      "spark.sql.catalog.nessie.uri": "http://host.docker.internal:19120/iceberg"
+      "spark.sql.catalog.nessie.io-impl": "org.apache.iceberg.aws.s3.S3FileIO"
+      "spark.sql.catalog.nessie.s3.endpoint": "http://host.docker.internal:9000"
+      "spark.sql.catalog.nessie.s3.path-style-access": "true"
+      "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      # S3A filesystem (for direct S3 reads/writes)
+      "spark.hadoop.fs.s3a.endpoint": "http://host.docker.internal:9000"
+      "spark.hadoop.fs.s3a.path.style.access": "true"
+      "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+      # OpenLineage (emits START/COMPLETE/FAIL events to Marquez)
+      "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener"
+      "spark.openlineage.transport.type": "http"
+      "spark.openlineage.transport.url": "http://host.docker.internal:5050"
+      "spark.openlineage.namespace": "spark"
+      # Shuffle tuning — controls how many partitions are created during joins/aggregations.
+      # Default 200 is fine for moderate data. Reduce for small jobs (less overhead),
+      # increase for large jobs (smaller partitions = less memory per partition).
+      "spark.sql.shuffle.partitions": "10"
+      # Adaptive Query Execution — Spark dynamically coalesces small partitions
+      # and optimizes join strategies at runtime. Enabled by default in Spark 4.x.
+      "spark.sql.adaptive.enabled": "true"
+    # Driver and executor share identical env vars
+    env:
+      - name: CATALOG_URI
+        value: "http://host.docker.internal:19120/iceberg"
+      - name: S3_ENDPOINT
+        value: "http://host.docker.internal:9000"
+      - name: S3_ACCESS_KEY
+        value: "admin"
+      - name: S3_SECRET_KEY
+        value: "password"
+      - name: OPENLINEAGE_URL
+        value: "http://host.docker.internal:5050"
+      - name: OPENLINEAGE_NAMESPACE
+        value: "spark"
