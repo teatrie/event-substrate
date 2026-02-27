@@ -318,8 +318,8 @@ tasks:
       - task: shutdown
       - echo "🧹 Destroying all persistent state..."
       - docker compose down -v
+      - supabase stop --no-backup
       - task: clean
-      - supabase db reset || true
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
   # ---------------------------------------------------------------------------
@@ -476,8 +476,3 @@ tasks:
     cmds:
       - rm -rf .task/
       - echo "✅ Build cache cleared."
-
-  reset:browser:
-    desc: Clear browser cache (localStorage, sessionStorage, cookies) for localhost:5173
-    cmds:
-      - node scripts/reset-browser-cache.mjs
