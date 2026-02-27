@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 )
 
 // ExpiredCleanupHandler handles FileUploadExpired events by removing the
@@ -34,7 +33,7 @@ func (h *ExpiredCleanupHandler) Handle(ctx context.Context, payload map[string]a
 	}
 
 	if err := h.remover.RemoveObject(ctx, h.bucket, filePath); err != nil {
-		log.Printf("ExpiredCleanupHandler: failed to remove object %q from bucket %q: %v (MinIO lifecycle policy is backstop)", filePath, h.bucket, err)
+		log.Warn().Err(err).Str("file_path", filePath).Str("bucket", h.bucket).Msg("ExpiredCleanupHandler: failed to remove object (MinIO lifecycle policy is backstop)")
 	}
 	return nil
 }

@@ -46,6 +46,20 @@ spec:
           value: "3600"
         - name: WEBHOOK_PORT
           value: "8090"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://host.docker.internal:4317"
         ports:
         - containerPort: 8090
           name: webhook
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 10

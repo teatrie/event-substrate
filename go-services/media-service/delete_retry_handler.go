@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -56,7 +55,7 @@ func (h *DeleteRetryHandler) Handle(ctx context.Context, payload map[string]any)
 			if produceErr := h.producer.Produce(ctx, deleteDeadLetterTopic, deadLetterEvent); produceErr != nil {
 				return fmt.Errorf("dead-letter produce failed: %w", produceErr)
 			}
-			log.Printf("DeleteRetryHandler: dead-lettered %s after %d retries", filePath, retryCount)
+			log.Info().Str("file_path", filePath).Int("retry_count", retryCount).Msg("DeleteRetryHandler: dead-lettered")
 			return nil
 		}
 
@@ -74,10 +73,10 @@ func (h *DeleteRetryHandler) Handle(ctx context.Context, payload map[string]any)
 		if produceErr := h.producer.Produce(ctx, deleteRetryTopic, retryEvent); produceErr != nil {
 			return fmt.Errorf("retry produce failed: %w", produceErr)
 		}
-		log.Printf("DeleteRetryHandler: re-queued %s with retry_count=%d", filePath, retryCount+1)
+		log.Info().Str("file_path", filePath).Int("retry_count", retryCount+1).Msg("DeleteRetryHandler: re-queued")
 		return nil
 	}
 
-	log.Printf("DeleteRetryHandler: successfully removed %s", filePath)
+	log.Info().Str("file_path", filePath).Msg("DeleteRetryHandler: successfully removed")
 	return nil
 }

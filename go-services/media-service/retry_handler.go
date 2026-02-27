@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 )
 
 // RetryHandler consumes upload.retry events, performs a synchronous MoveObject,
@@ -23,7 +22,7 @@ func (h *RetryHandler) Handle(ctx context.Context, payload map[string]any) error
 	filePath, _ := payload["file_path"].(string)
 	permanentPath, _ := payload["permanent_path"].(string)
 
-	log.Printf("Retry handler: moving %s → %s", filePath, permanentPath)
+	log.Info().Str("src", filePath).Str("dst", permanentPath).Msg("Retry handler: moving")
 
 	if err := h.mover.MoveObject(ctx, h.bucket, filePath, permanentPath); err != nil {
 		return fmt.Errorf("retry move failed: %w", err)
@@ -58,6 +57,6 @@ func (h *RetryHandler) Handle(ctx context.Context, payload map[string]any) error
 		return fmt.Errorf("retry re-produce failed: %w", err)
 	}
 
-	log.Printf("Retry handler: re-produced upload.received with retry_count=%d", retryCount+1)
+	log.Info().Int("retry_count", retryCount+1).Msg("Retry handler: re-produced upload.received")
 	return nil
 }

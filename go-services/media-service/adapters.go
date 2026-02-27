@@ -6,13 +6,14 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/hamba/avro/v2"
 	"github.com/minio/minio-go/v7"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
 )
 
 // ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ func getSchemaForTopic(ctx context.Context, topic string) (*cachedTopicSchema, e
 
 	cached := &cachedTopicSchema{id: schemaSubject.ID, schema: parsed}
 	schemaTopicCache.Store(topic, cached)
-	log.Printf("Cached producer schema ID %d for topic %q", cached.id, topic)
+	log.Info().Int("schema_id", cached.id).Str("topic", topic).Msg("Cached producer schema")
 	return cached, nil
 }
 
@@ -175,4 +176,41 @@ func (p *avroKafkaProducer) Produce(ctx context.Context, topic string, event map
 		return fmt.Errorf("kafka produce to %q: %w", topic, err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// OTel metric helpers
+// ---------------------------------------------------------------------------
+
+// topicAttr returns a "topic" attribute for OTel metrics.
+func topicAttr(topic string) attribute.KeyValue {
+	return attribute.String("topic", topic)
+}
+
+// statusAttr returns a "status" attribute for OTel metrics.
+func statusAttr(status string) attribute.KeyValue {
+	return attribute.String("status", status)
+}
+
+// ---------------------------------------------------------------------------
+// Instrumented Kafka producer
+// ---------------------------------------------------------------------------
+
+// instrumentedKafkaProducer wraps EventProducer and increments an OTel counter
+// on each produce call.
+type instrumentedKafkaProducer struct {
+	inner   EventProducer
+	counter otelmetric.Int64Counter
+}
+
+func (p *instrumentedKafkaProducer) Produce(ctx context.Context, topic string, event map[string]any) error {
+	err := p.inner.Produce(ctx, topic, event)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	p.counter.Add(ctx, 1,
+		otelmetric.WithAttributes(topicAttr(topic), statusAttr(status)),
+	)
+	return err
 }
