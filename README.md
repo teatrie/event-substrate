@@ -253,6 +253,13 @@ task shutdown
 | `task test:e2e:upload` | Test media upload saga → credit deduction → notification flow |
 | `task test:browser` | Run Playwright browser UI tests — **requires `task frontend` running in a separate terminal first** |
 
+**Telemetry**
+
+| Command | Description |
+|---|---|
+| `task telemetry:kube-metrics:install` | Install kube-state-metrics for K8s cluster observability (NodePort 30080) |
+| `task telemetry:kube-metrics:purge` | Uninstall kube-state-metrics |
+
 **Utilities**
 
 | Command | Description |
@@ -283,7 +290,7 @@ The platform includes a production-grade observability stack with full instrumen
 *   **Prometheus:** Metrics storage + scraping engine (port 9090) — includes custom Kafka metrics, HTTP server metrics, and infrastructure metrics (Redpanda, MinIO, postgres)
 *   **Loki:** Log aggregation (port 3100) — consumes structured JSON logs from Go services via zerolog
 *   **Jaeger:** Distributed tracing (port 16686) — end-to-end request traces with span context propagation
-*   **Grafana:** Dashboard visualization (port 3000, no login required) — 4 provisioned dashboards with golden signals, alerts, and saga health
+*   **Grafana:** Dashboard visualization (port 3000, no login required) — 6 provisioned dashboards with golden signals, alerts, saga health, K8s cluster metrics, and Airflow observability
 
 ### Access URLs
 When you run `task start`, the telemetry stack boots up alongside the infrastructure:
@@ -295,14 +302,16 @@ When you run `task start`, the telemetry stack boots up alongside the infrastruc
 *   **Marquez Web UI:** [http://localhost:3001](http://localhost:3001) (visual lineage graph)
 
 ### Grafana Dashboards
-Four provisioned JSON dashboards provide full platform visibility:
+Six provisioned JSON dashboards provide full platform visibility:
 *   **Platform Overview (UID: `platform-overview`)** — service health status, golden signals (latency/errors/throughput), Kafka consumer lag, infrastructure metrics
 *   **Go Services (UID: `go-services`)** — per-service HTTP request duration/errors, active requests, Kafka producer/consumer message rates and errors
 *   **Kafka & Redpanda (UID: `kafka-redpanda`)** — cluster health, topic partition distribution, consumer group lag, disk/CPU/network resources
 *   **Media Saga Pipeline (UID: `media-saga`)** — upload funnel (intents → approvals → signed URLs → confirms), saga DLQ queue depth, Flink processor health
+*   **Kubernetes Cluster (UID: `kubernetes`)** — pod status/restarts by namespace, deployment & statefulset replica health, CPU/memory resource requests, node conditions
+*   **Airflow Orchestration (UID: `airflow`)** — scheduler heartbeat, DAG bag size, DAG run duration/states, task instance states, executor/pool slots, task queue depth
 
 ### Alert Rules
-Eight alert rules (configurable in `telemetry/prometheus/rules.yml`):
+Twelve alert rules (configurable in `telemetry/grafana/provisioning/alerting/platform-alerts.yaml`):
 *   **Go service down** — liveness check failed for api-gateway, media-service, or message-consumer
 *   **Go service high error rate** — >5% of requests returning 5xx errors
 *   **Go service high latency** — p99 HTTP request duration >5 seconds
@@ -311,6 +320,10 @@ Eight alert rules (configurable in `telemetry/prometheus/rules.yml`):
 *   **Flink job down** — PyFlink credit check, move saga, or TTL expiry processor crashed
 *   **Postgres connections high** — >70% of available connection slots consumed
 *   **Kafka consumer lag** — message-consumer group lag >100 messages
+*   **K8s pod crash-loop** — pod container restarting repeatedly (3m sustained)
+*   **K8s pod pending** — pod stuck in Pending state for >5 minutes
+*   **Airflow scheduler down** — scheduler heartbeat absent for >2 minutes (critical)
+*   **Airflow DAG failure rate** — DAG runs failing in the last 5 minutes
 
 ### Instrumentation Details
 
@@ -328,6 +341,12 @@ Each service includes:
 *   **Redpanda Admin API** (port 9644, path `/public_metrics`) — cluster health, topic/partition metrics, resource usage
 *   **MinIO** (port 9000, path `/minio/v2/metrics/cluster`) — enabled via `MINIO_PROMETHEUS_AUTH_TYPE=public` env var
 *   **postgres-exporter** (port 9187) — connection pool, query latency, cache hit ratios
+*   **kube-state-metrics** (NodePort 30080) — K8s pod/deployment/statefulset/node metrics via `host.docker.internal`
+
+#### Airflow Telemetry (OTel)
+*   Airflow 3.x ships with built-in OpenTelemetry support (`apache-airflow[otel]`)
+*   Metrics and traces push to OTel Collector via OTLP HTTP on port 4318 (same path as Go services use gRPC on 4317)
+*   Configured in `airflow/values-local.yaml` under `config.metrics` and `config.traces`
 
 #### Flink & PyFlink Instrumentation
 *   **StatsD Reporter** — Flink native `StatsDReporter` pushes metrics to OTel Collector UDP port 8125
@@ -335,15 +354,26 @@ Each service includes:
 
 ### Data Flow Summary
 ```
-Go Services (OTLP gRPC) → OTel Collector → Prometheus (metrics)
-                                        ↘ Loki (logs via zerolog)
-                                        ↘ Jaeger (traces)
-                                            ↓
-                                         Grafana (dashboards + alerts)
+Go Services (OTLP gRPC)        → OTel Collector → Prometheus (metrics)
+                                               ↘ Loki (logs via zerolog)
+                                               ↘ Jaeger (traces)
+                                                   ↓
+                                                Grafana (dashboards + alerts)
 
-Flink/PyFlink (StatsD UDP) ↘ OTel Collector → Prometheus
+Airflow pods (OTLP HTTP)       → OTel Collector → Prometheus (metrics) + Jaeger (traces)
+Flink/PyFlink (StatsD UDP)     → OTel Collector → Prometheus
+kube-state-metrics (NodePort)  → Prometheus scrape
 Infrastructure (Redpanda, MinIO, postgres-exporter) → Prometheus scrape
 ```
+
+### Telemetry Storage Persistence
+Telemetry backends use named Docker volumes for local data persistence across `docker compose restart` cycles:
+*   **Prometheus:** `prometheus_data` volume, 15-day TSDB retention
+*   **Jaeger:** `jaeger_data` volume, Badger disk-backed span storage (replaces in-memory default)
+*   **Loki:** `loki_data` volume, persists chunk and index data
+
+> [!NOTE]
+> Data survives `docker compose restart` and `docker compose stop/start`, but is destroyed on `docker compose down -v` (i.e., `task purge`). For production, swap to managed backends or S3/GCS — see `docs/productionization.md` Section 8.
 
 ### Migrating to Production (Datadog / Google Cloud)
 When moving from local development to a cloud provider like Datadog or Google Cloud Operations:

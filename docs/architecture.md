@@ -110,21 +110,25 @@ ClickHouse authenticates as `clickhouse-consumer` and pipes the `internal.platfo
 
 ### Observability Stack
 
-- **Go API Gateway, media-service, and message-consumer** push OTLP metrics and traces to the OpenTelemetry Collector
-- **Flink processors** push StatsD metrics to the OTel Collector
+- **Go API Gateway, media-service, and message-consumer** push OTLP metrics and traces to the OpenTelemetry Collector (gRPC port 4317)
+- **Airflow pods** push OTLP metrics and traces to the OTel Collector (HTTP port 4318) — configured via `config.metrics` and `config.traces` in Helm values
+- **Flink processors** push StatsD metrics to the OTel Collector (UDP port 8125)
+- **kube-state-metrics** exposes K8s cluster metrics on NodePort 30080, scraped directly by Prometheus via `host.docker.internal`
 - **Infrastructure metrics** scraped directly: Redpanda admin API (`/public_metrics`), MinIO (`/minio/v2/metrics/cluster`), postgres-exporter
 - The Collector fans out to **Prometheus** (metrics), **Loki** (logs), and **Jaeger** (traces)
-- All three feed into **Grafana** dashboards with 4 provisioned dashboards: Platform Overview, Go Services, Kafka & Redpanda, and Media Saga Pipeline
+- All three feed into **Grafana** dashboards with 6 provisioned dashboards: Platform Overview, Go Services, Kafka & Redpanda, Media Saga Pipeline, Kubernetes Cluster, and Airflow Orchestration
+- **Telemetry persistence:** Named Docker volumes for Prometheus (15-day retention), Jaeger (Badger disk storage), and Loki. Data survives restarts but is destroyed on `task purge`
 
 ### Telemetry & Observability Data Flow
 
 **Signal Types and Destinations:**
 
-1. **Metrics (OTLP gRPC + StatsD → Prometheus)**
-   - Go services send structured metrics via OTLP to OTel Collector port 4317
+1. **Metrics (OTLP gRPC/HTTP + StatsD → Prometheus)**
+   - Go services send structured metrics via OTLP gRPC to OTel Collector port 4317
+   - Airflow pods send metrics via OTLP HTTP to OTel Collector port 4318 (scheduler heartbeat, DAG run duration, task instance counts, executor/pool slots)
    - Custom Kafka metrics: `kafka.producer.messages.total`, `kafka.consumer.messages.total`, `kafka.consumer.errors.total` (updated per-message)
    - HTTP server metrics via `otelhttp` middleware: `http.server.request.duration`, `http.server.active_requests`, `http.server.request.body.size`
-   - Infrastructure metrics scraped from: Redpanda port 9644 (`/public_metrics`), MinIO port 9000 (`/minio/v2/metrics/cluster`), postgres-exporter port 9187
+   - Infrastructure metrics scraped from: Redpanda port 9644 (`/public_metrics`), MinIO port 9000 (`/minio/v2/metrics/cluster`), postgres-exporter port 9187, kube-state-metrics NodePort 30080
    - Flink/PyFlink jobs emit operator throughput, backpressure, and checkpoint durations via StatsD to OTel Collector port 8125
 
 2. **Logs (zerolog → stdout → Loki)**
@@ -132,11 +136,12 @@ ClickHouse authenticates as `clickhouse-consumer` and pipes the `internal.platfo
    - All logs output to stderr, captured by Docker/K8s logging driver and indexed in Loki
    - Context propagation: trace IDs and span IDs automatically included in log lines when available
 
-3. **Traces (OTLP gRPC → Jaeger)**
+3. **Traces (OTLP gRPC/HTTP → Jaeger)**
    - Go services auto-instrument all HTTP handlers via `otelhttp.NewHandler()` middleware
+   - Airflow sends traces via OTLP HTTP (port 4318) — DAG run spans with task-level detail
    - Outbound Kafka operations tagged with trace context
    - Database queries inherit trace context from parent HTTP spans
-   - Jaeger stores traces for 72 hours locally (configurable)
+   - Jaeger uses Badger disk-backed storage (named `jaeger_data` volume) for persistence across restarts
 
 **Health Check Endpoints:**
 - All Go services expose `/healthz:8080` (liveness probe) and `/readyz:8080` (readiness probe, checks Kafka/DB)

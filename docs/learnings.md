@@ -358,6 +358,18 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 ---
 
+## 📊 Telemetry Configuration
+
+### 1. Airflow 3.x OTel Metrics Use `_total` Suffix on Counters
+**Observation:** Airflow 3.x ships with built-in OpenTelemetry support. When exporting metrics via OTLP, all counter metrics follow the OpenTelemetry naming convention and append `_total` to the metric name (e.g., `airflow_scheduler_heartbeat_total`, not `airflow_scheduler_heartbeat`). This differs from the StatsD metric names documented in older Airflow versions.
+**Decision:** When building Grafana dashboards or alert rules for Airflow OTel metrics, always verify actual metric names via `curl localhost:9090/api/v1/query?query={__name__=~"airflow.*"}` before writing PromQL queries. Gauge metrics (e.g., `airflow_dagbag_size`, `airflow_executor_open_slots`) keep their original names; only counters get the `_total` suffix.
+
+### 2. Grafana Provisioned Datasource UIDs Must Be Explicit
+**Observation:** Grafana auto-generates random UIDs for provisioned datasources when no `uid:` field is specified in `datasources.yaml` (e.g., `PBFA97CFB590B2093`). Provisioned dashboards referencing `"uid": "prometheus"` silently fail to resolve the datasource — panels render as "No data" with no error in the UI. Changing the UID after initial provisioning causes Grafana to crash on startup with `Datasource provisioning error: data source not found`.
+**Decision:** Always set explicit `uid:` fields in `telemetry/grafana/provisioning/datasources/datasources.yaml` (`prometheus`, `loki`, `jaeger`) to match what dashboards reference. If changing UIDs on an existing Grafana instance, force-recreate the container (`docker compose up -d --force-recreate grafana`) to clear the stale internal state. Ephemeral Grafana storage makes this safe for local dev.
+
+---
+
 ## 📦 Project Philosophy
 
 ### 1. The "Base Stack" Strategy
