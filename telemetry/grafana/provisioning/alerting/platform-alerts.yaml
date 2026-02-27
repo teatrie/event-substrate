@@ -35,6 +35,9 @@ groups:
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
             datasourceUid: prometheus
             model:
               expr: >
@@ -58,6 +61,9 @@ groups:
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
             datasourceUid: prometheus
             model:
               expr: >
@@ -73,16 +79,19 @@ groups:
         labels:
           severity: warning
 
-      # Kafka consumer lag — fires if message-consumer lag exceeds KEDA threshold
+      # Kafka consumer lag — fires if consumer lag exceeds threshold (Redpanda metric)
       - uid: kafka-consumer-lag-high
         title: "Kafka Consumer Lag High"
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
             datasourceUid: prometheus
             model:
               expr: >
-                kafka_consumergroup_lag{topic="public.user.message.events"} > 20
+                redpanda_kafka_consumer_group_lag > 20
               intervalMs: 1000
               maxDataPoints: 43200
         noDataState: NoData
@@ -90,6 +99,126 @@ groups:
         for: 2m
         annotations:
           summary: "Kafka consumer lag is high"
-          description: "message-consumer lag on public.user.message.events exceeded 20. KEDA should be scaling — check consumer pod health."
+          description: "Consumer group lag exceeded 20 messages. KEDA should be scaling — check consumer pod health and topic throughput."
+        labels:
+          severity: warning
+
+      # Go service health — fires if any Go service health endpoint is unreachable
+      - uid: go-service-down
+        title: "Go Service Health Check Failed"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                absent(http_server_active_requests) == 1
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "Go service is not reporting metrics"
+          description: "No http_server_active_requests metric detected from Go services. Check if api-gateway, media-service, or message-consumer pods are running."
+        labels:
+          severity: critical
+
+      # Go service high error rate — fires if HTTP 5xx rate exceeds 5%
+      - uid: go-service-high-error-rate
+        title: "Go Service High Error Rate"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                (sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))) > 0.05
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Go service error rate is above 5%"
+          description: "More than 5% of HTTP requests are returning 5xx status codes over the last 5 minutes."
+        labels:
+          severity: warning
+
+      # Go service high latency — p99 > 5s
+      - uid: go-service-high-latency
+        title: "Go Service High Latency"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket[5m])) by (le)) > 5
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Go service p99 latency is above 5 seconds"
+          description: "The 99th percentile request latency has exceeded 5 seconds for 5 minutes."
+        labels:
+          severity: warning
+
+      # Media saga DLQ growing — dead-letter topics receiving messages
+      - uid: media-saga-dlq-growing
+        title: "Media Saga Dead-Letter Queue Growing"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                rate(kafka_consumer_messages_total{topic=~"internal.media.*.dead-letter"}[5m]) > 0
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Media saga dead-letter queue is receiving messages"
+          description: "Messages are flowing to the media DLQ, indicating saga failures after max retries. Check move-saga-processor and delete-retry-handler logs."
+        labels:
+          severity: warning
+
+      # Redpanda disk usage high
+      - uid: redpanda-disk-high
+        title: "Redpanda Disk Usage High"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >
+                (1 - (redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes)) > 0.8
+              intervalMs: 1000
+              maxDataPoints: 43200
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Redpanda disk usage is above 80%"
+          description: "Redpanda broker disk usage has exceeded 80%. Consider increasing storage or adjusting retention policies."
         labels:
           severity: warning
