@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+# Dockerfile.spark — Multi-stage build for Spark jobs with Iceberg + OpenLineage
+#
+# Stages:
+#   base        — Spark 4.0.2, downloaded JARs, base Python deps (shared layer)
+#   production  — copies pyspark_apps/ (tests excluded via --exclude), runs as spark user 185
+#   test        — copies full pyspark_apps/ including tests, runs pytest
+#
+# Build:
+#   docker build -f Dockerfile.spark --target production -t pyspark/identity-daily-login-aggregates:latest .
+#   docker build -f Dockerfile.spark --target test -t pyspark/identity-daily-login-aggregates:test .
+
+# -------------------------------------------------------------------
+# Base: Spark 4.0.2 + Python3, JARs, base Python deps
+# -------------------------------------------------------------------
+FROM apache/spark:4.0.2-python3 AS base
+
+USER root
+
+# Download integration JARs into Spark's jars/ directory (auto-loaded at runtime)
+RUN curl -fsSL -o /opt/spark/jars/iceberg-spark-runtime-4.0_2.13-1.10.1.jar \
+      https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar \
+    && curl -fsSL -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
+      https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
+    && curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+      https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar \
+    && curl -fsSL -o /opt/spark/jars/openlineage-spark_2.13-1.42.1.jar \
+      https://repo1.maven.org/maven2/io/openlineage/openlineage-spark_2.13/1.42.1/openlineage-spark_2.13-1.42.1.jar
+
+WORKDIR /opt/spark/work-dir
+
+# PySpark is pre-installed in the image at /opt/spark/python — add it to PYTHONPATH
+# so it's importable without the Spark entrypoint setting it up.
+ENV PYTHONPATH="/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip"
+
+# Install additional Python dependencies (pyspark already in image, defopt for CLI)
+RUN pip install --no-cache-dir 'defopt>=7.0'
+
+# -------------------------------------------------------------------
+# Production: job code only — tests excluded by BuildKit --exclude flags
+# (patterns mirror pyspark_apps/.dockerignore)
+# -------------------------------------------------------------------
+FROM base AS production
+
+COPY --exclude=**/tests/** --exclude=**/__pycache__/** --exclude=**/*.pyc \
+    pyspark_apps/ /opt/spark/work-dir/pyspark_apps/
+
+# Run as the spark user (uid 185) per official image convention
+USER 185
+
+# -------------------------------------------------------------------
+# Test: full source including tests — runs pytest
+# -------------------------------------------------------------------
+FROM base AS test
+
+# Install test dependencies
+RUN pip install --no-cache-dir 'pytest>=8.0'
+
+COPY pyspark_apps/ /opt/spark/work-dir/pyspark_apps/
+
+# Clear the Spark entrypoint (expects spark-submit args) so pytest runs directly
+ENTRYPOINT []
+CMD ["python3", "-m", "pytest", "pyspark_apps/", "-v"]
