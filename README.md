@@ -213,7 +213,11 @@ task shutdown
 | `task status` | Show status of all services (Supabase, Docker, K8s pods) |
 | `task logs:gateway` | Tail API Gateway logs |
 | `task logs:consumer` | Tail Message Consumer logs |
+| `task logs:media-service` | Tail Media Service logs |
 | `task logs:flink` | Tail Flink job logs |
+| `task health` | Check health of all Go services at once |
+| `task health:gateway` | Check API Gateway health (`/healthz` + `/readyz`) |
+| `task health:media-service` | Check Media Service health (`/healthz` + `/readyz`) |
 | `task clean` | Clear build checksums (forces full rebuild on next `task start`) |
 
 > [!TIP]
@@ -222,23 +226,76 @@ task shutdown
 > [!NOTE]
 > **Browser Tests:** `task test:browser` runs Playwright against the live Vite dev server. You must have `task frontend` running in a separate terminal before starting the tests. The test suite exercises the full UI flow — login, media upload, credit display, notifications — against the real backend.
 
-## Telemetry & Observability (Grafana + OpenTelemetry)
+## Telemetry & Observability (Grafana + OpenTelemetry + Prometheus)
 
-The local environment includes a complete OpenTelemetry (OTel) observability stack designed to perfectly mirror a production Datadog or Google Cloud stack without vendor lock-in.
+The platform includes a production-grade observability stack with full instrumentation across Go microservices, Flink processors, and infrastructure layers. The stack is designed to mirror Datadog or Google Cloud Trace/Monitoring without vendor lock-in.
 
-### Local Dashboards
+### Telemetry Stack Components
+*   **OpenTelemetry Collector:** Central hub (OTLP gRPC on 4317, StatsD UDP on 8125) receiving signals from all services
+*   **Prometheus:** Metrics storage + scraping engine (port 9090) — includes custom Kafka metrics, HTTP server metrics, and infrastructure metrics (Redpanda, MinIO, postgres)
+*   **Loki:** Log aggregation (port 3100) — consumes structured JSON logs from Go services via zerolog
+*   **Jaeger:** Distributed tracing (port 16686) — end-to-end request traces with span context propagation
+*   **Grafana:** Dashboard visualization (port 3000, no login required) — 4 provisioned dashboards with golden signals, alerts, and saga health
+
+### Access URLs
 When you run `task start`, the telemetry stack boots up alongside the infrastructure:
-*   **Grafana UI:** [http://localhost:3000](http://localhost:3000) (No login required)
-*   **Prometheus (Metrics):** [http://localhost:9090](http://localhost:9090)
-*   **Loki (Logs):** Port `3100` (queried via Grafana)
-*   **Jaeger (Traces):** [http://localhost:16686](http://localhost:16686)
+*   **Grafana UI:** [http://localhost:3000](http://localhost:3000)
+*   **Prometheus UI:** [http://localhost:9090](http://localhost:9090)
+*   **Jaeger UI:** [http://localhost:16686](http://localhost:16686)
+*   **Loki:** Port 3100 (queried via Grafana, not directly)
 
-### How It Works
-*   **Go Microservice:** Instrumented natively with OpenTelemetry. It pushes OTLP metrics to the OTel Collector at `host.docker.internal:4317`.
-*   **Flink & PyFlink:** Instrumented using the native `StatsDReporter`. They push metrics to the OTel Collector via UDP on `host.docker.internal:8125`.
-*   **OpenTelemetry Collector:** The central router (`otel-collector` in `docker-compose.yml`) receives the data and fans it out to Prometheus, Loki, and Jaeger.
+### Grafana Dashboards
+Four provisioned JSON dashboards provide full platform visibility:
+*   **Platform Overview (UID: `platform-overview`)** — service health status, golden signals (latency/errors/throughput), Kafka consumer lag, infrastructure metrics
+*   **Go Services (UID: `go-services`)** — per-service HTTP request duration/errors, active requests, Kafka producer/consumer message rates and errors
+*   **Kafka & Redpanda (UID: `kafka-redpanda`)** — cluster health, topic partition distribution, consumer group lag, disk/CPU/network resources
+*   **Media Saga Pipeline (UID: `media-saga`)** — upload funnel (intents → approvals → signed URLs → confirms), saga DLQ queue depth, Flink processor health
+
+### Alert Rules
+Eight alert rules (configurable in `telemetry/prometheus/rules.yml`):
+*   **Go service down** — liveness check failed for api-gateway, media-service, or message-consumer
+*   **Go service high error rate** — >5% of requests returning 5xx errors
+*   **Go service high latency** — p99 HTTP request duration >5 seconds
+*   **Media saga DLQ growing** — dead-letter topic lag increasing (indicates move failures)
+*   **Redpanda disk high** — cluster disk usage >80%
+*   **Flink job down** — PyFlink credit check, move saga, or TTL expiry processor crashed
+*   **Postgres connections high** — >70% of available connection slots consumed
+*   **Kafka consumer lag** — message-consumer group lag >100 messages
+
+### Instrumentation Details
+
+#### Go Services (api-gateway, media-service, message-consumer)
+Each service includes:
+*   **OpenTelemetry SDK** — initialized in `otel.go` via `initOTel()`, exports traces+metrics to OTel Collector (OTLP gRPC on `OTEL_EXPORTER_OTLP_ENDPOINT`, default `http://host.docker.internal:4317`)
+*   **Structured Logging** — zerolog JSON logging to stderr (captured by Loki via Docker driver)
+*   **Health Endpoints** — `/healthz` (liveness, always 200), `/readyz` (readiness, checks Kafka/DB connectivity)
+*   **HTTP Auto-Instrumentation** — `otelhttp` middleware auto-tracks `http.server.request.duration`, `http.server.active_requests`, `http.server.request.body.size`
+*   **Custom Kafka Metrics** — `kafka.producer.messages.total`, `kafka.consumer.messages.total`, `kafka.consumer.errors.total` (meter-based, updated on each message)
+*   **K8s Probes** — liveness probe targets `/healthz:8080`, readiness probe targets `/readyz:8080` (message-consumer also exposes on port 8091)
+
+#### Prometheus Scrape Targets
+*   **OTel Collector** (port 8888) — converts OTLP signals to Prometheus format
+*   **Redpanda Admin API** (port 9644, path `/public_metrics`) — cluster health, topic/partition metrics, resource usage
+*   **MinIO** (port 9000, path `/minio/v2/metrics/cluster`) — enabled via `MINIO_PROMETHEUS_AUTH_TYPE=public` env var
+*   **postgres-exporter** (port 9187) — connection pool, query latency, cache hit ratios
+
+#### Flink & PyFlink Instrumentation
+*   **StatsD Reporter** — Flink native `StatsDReporter` pushes metrics to OTel Collector UDP port 8125
+*   **Metrics** — Flink SQL/PyFlink jobs emit operator-level throughput, backpressure, and checkpoint timings
+
+### Data Flow Summary
+```
+Go Services (OTLP gRPC) → OTel Collector → Prometheus (metrics)
+                                        ↘ Loki (logs via zerolog)
+                                        ↘ Jaeger (traces)
+                                            ↓
+                                         Grafana (dashboards + alerts)
+
+Flink/PyFlink (StatsD UDP) ↘ OTel Collector → Prometheus
+Infrastructure (Redpanda, MinIO, postgres-exporter) → Prometheus scrape
+```
 
 ### Migrating to Production (Datadog / Google Cloud)
 When moving from local development to a cloud provider like Datadog or Google Cloud Operations:
-1.  **Do not change the application code.** The Go and PyFlink apps remain completely untouched.
-2.  Update the `exporters` block in your production `otel-collector-config.yaml` to use the vendor-specific exporter (e.g., `datadog` or `googlecloud`), and provide your API keys. The collector will seamlessly route identical metrics to your new vendor.
+1.  **Do not change the application code.** The Go and PyFlink apps remain completely untouched — all instrumentation is vendor-neutral OpenTelemetry.
+2.  Update the `exporters` block in your production `otel-collector-config.yaml` to use the vendor-specific exporter (e.g., `datadog` for Datadog, `googlecloud` for GCP, `splunk_hec` for Splunk). Provide your API keys and endpoint URLs. The collector will seamlessly route identical signals to your production platform.
