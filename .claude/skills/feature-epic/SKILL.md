@@ -22,7 +22,12 @@ Do not write any implementation code yourself. Execute this in two distinct phas
    - **Taskfile wiring**: Build task runs before deployment (`k8s:*` depends on `build:*`), and both are reachable from `task init`/`task start`
    - **Image rebuild for modified Dockerfiles**: If an existing Dockerfile is changed (e.g., adding a pip dependency), the image MUST be rebuilt — local `go build` or `pytest` passing does NOT validate the container
    - Code is not complete until it can be deployed with `task init` and runs as a pod. Local build/test alone is insufficient.
-5. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
+5. **Mandatory cost analysis** — before presenting the plan, analyze each domain's complexity and determine whether `/agent-team` orchestration should be used:
+   - For each domain, assess: complexity (trivial / moderate / high), whether TDD applies (skip for config/YAML, migrations, docs, one-line fixes per CLAUDE.md), and the cheapest effective model (Haiku for trivial, Sonnet for moderate, Opus for high/novel).
+   - If 2+ domains can be routed to a cheaper model than the current session model, **recommend `/agent-team`** with per-domain model assignments.
+   - If domains have independent sub-tasks that can run in parallel (e.g., identical patterns applied to separate services), note the parallelism opportunity.
+   - Present the cost analysis table alongside the domain plan. Default to the cheapest effective option.
+6. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
 
 ## PHASE 2: Sequential TDD Execution
 Once I approve the Phase 1 plan, you will execute the implementation for EACH domain sequentially. Do not mix contexts between domains.
