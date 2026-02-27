@@ -312,6 +312,42 @@ The local OTel Collector (`telemetry/otel-collector-config.yaml`) exports to Pro
 - Database connection pool exhaustion
 - Pod restart count > 3 in 10 minutes
 
+### Grafana Authentication
+
+Local dev uses anonymous admin access (`GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUTH_DISABLE_LOGIN_FORM=true`). Production must enforce identity-based authentication.
+
+**Recommended: IAM / SSO integration** — Grafana supports cloud-native identity providers via environment variables. No plugin installation or custom code needed.
+
+| Provider | Mechanism | Key Environment Variables |
+|----------|-----------|---------------------------|
+| **GCP** | IAP (Identity-Aware Proxy) | `GF_AUTH_PROXY_ENABLED=true`, `GF_AUTH_PROXY_HEADER_NAME=X-Goog-Authenticated-User-Email`, `GF_AUTH_PROXY_HEADER_PROPERTY=email`, `GF_AUTH_PROXY_AUTO_SIGN_UP=true` |
+| **AWS** | ALB + Cognito (OIDC) | `GF_AUTH_GENERIC_OAUTH_ENABLED=true`, `GF_AUTH_GENERIC_OAUTH_NAME=Cognito`, `GF_AUTH_GENERIC_OAUTH_CLIENT_ID=<cognito-client-id>`, `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=<from-secrets-manager>`, `GF_AUTH_GENERIC_OAUTH_SCOPES=openid email profile`, `GF_AUTH_GENERIC_OAUTH_AUTH_URL=https://<pool>.auth.<region>.amazoncognito.com/oauth2/authorize`, `GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://<pool>.auth.<region>.amazoncognito.com/oauth2/token`, `GF_AUTH_GENERIC_OAUTH_API_URL=https://<pool>.auth.<region>.amazoncognito.com/oauth2/userInfo` |
+| **Azure** | Entra ID (AAD) | `GF_AUTH_AZUREAD_ENABLED=true`, `GF_AUTH_AZUREAD_CLIENT_ID=<app-id>`, `GF_AUTH_AZUREAD_CLIENT_SECRET=<from-key-vault>`, `GF_AUTH_AZUREAD_TENANT_ID=<tenant-id>`, `GF_AUTH_AZUREAD_AUTH_URL=https://login.microsoftonline.com/<tenant>/oauth2/v2.0/authorize`, `GF_AUTH_AZUREAD_TOKEN_URL=https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` |
+
+**Production steps:**
+1. Disable anonymous access: `GF_AUTH_ANONYMOUS_ENABLED=false`, remove `GF_AUTH_DISABLE_LOGIN_FORM`
+2. Set the provider env vars above (store secrets via ESO from Section 2)
+3. Configure role mapping: `GF_AUTH_<PROVIDER>_ROLE_ATTRIBUTE_PATH` to map IdP groups → Grafana roles (Admin/Editor/Viewer)
+4. Optionally enable `GF_AUTH_<PROVIDER>_ALLOWED_ORGANIZATIONS` or `ALLOWED_DOMAINS` to restrict access
+
+**GCP IAP note:** IAP sits in front of the Grafana Ingress and handles all authentication. Grafana trusts the `X-Goog-Authenticated-User-Email` header — no OAuth flow needed inside Grafana itself. This is the simplest path if you're already on GKE.
+
+### Telemetry Storage in Production
+
+Local dev uses named Docker volumes (Prometheus TSDB, Jaeger Badger, Loki filesystem). Production requires durable, scalable backends.
+
+| Service | Local (Docker Volume) | GCP Production | AWS Production |
+|---------|----------------------|----------------|----------------|
+| **Prometheus** | `prometheus_data`, 15-day TSDB retention | Google Managed Prometheus (GMP), or Thanos → GCS | Amazon Managed Prometheus (AMP), or Thanos → S3 |
+| **Jaeger** | `jaeger_data`, Badger disk storage | Tempo → GCS, or Jaeger → Elasticsearch on GKE | Tempo → S3, or Jaeger → OpenSearch Service |
+| **Loki** | `loki_data`, filesystem chunks | Loki → GCS (`storage_config.gcs`), or Google Cloud Logging | Loki → S3 (`storage_config.aws`), or CloudWatch Logs |
+| **Grafana** | Ephemeral (anonymous admin, no persistence needed) | Grafana Cloud, or self-hosted with Cloud SQL backend + IAP auth | Grafana Cloud, or self-hosted with RDS backend + Cognito auth |
+
+**Config swap paths (no application changes):**
+- **Prometheus → Thanos:** Add Thanos sidecar to Prometheus pod, configure `--objstore.config` for GCS/S3 bucket. Remote-write continues to work unchanged.
+- **Jaeger → Tempo:** Change OTel Collector exporter from `otlp` (Jaeger) to `otlp` (Tempo endpoint). Same OTLP protocol, different backend.
+- **Loki → GCS/S3:** Update `storage_config` in `loki-config.yaml` from `filesystem` to `gcs` or `aws`. Schema and queries remain identical.
+
 ### Log Retention
 
 Define retention policies for all telemetry data:
@@ -488,6 +524,8 @@ The MinIO `media-uploads` bucket uses permissive CORS for local dev. In producti
 - [ ] Pod disruption budgets for all stateless services (Section 5)
 - [ ] Security contexts (non-root) on all pods (Section 5)
 - [ ] Alerting rules configured (Section 8)
+- [ ] Grafana anonymous access disabled, IAM/SSO authentication enabled (Section 8)
+- [ ] Telemetry storage migrated to durable backends — GCS/S3 for Prometheus, Loki, Jaeger (Section 8)
 - [ ] Load testing performed against staging environment
 - [ ] Disaster recovery plan documented (backup/restore for Postgres, Kafka offsets, Flink savepoints)
 

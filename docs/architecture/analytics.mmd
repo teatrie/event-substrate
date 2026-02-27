@@ -106,14 +106,16 @@ graph TD
     subgraph ObservabilityStack["Observability Stack"]
         direction TB
         OTel["OTel Collector"]:::telemetry
-        Prometheus["Prometheus\n(metrics)"]:::telemetry
+        Prometheus["Prometheus\n(metrics, 15d retention)"]:::telemetry
         Loki["Loki\n(logs)"]:::telemetry
-        Jaeger["Jaeger\n(traces)"]:::telemetry
-        Grafana["Grafana Dashboard"]:::telemetry
+        Jaeger["Jaeger\n(traces, Badger disk)"]:::telemetry
+        Grafana["Grafana\n(6 dashboards, 12 alerts)"]:::telemetry
+        KSM["kube-state-metrics\n(NodePort 30080)"]:::telemetry
 
         OTel -->|"scrape / remote_write"| Prometheus
         OTel -->|"log forwarding"| Loki
         OTel -->|"trace export"| Jaeger
+        KSM -->|"Prometheus scrape"| Prometheus
         Prometheus -->|"metrics datasource"| Grafana
         Loki -->|"log datasource"| Grafana
         Jaeger -->|"trace datasource"| Grafana
@@ -131,4 +133,8 @@ graph TD
     FlinkUnified -->|"StatsD metrics"| OTel
 
     %% API Gateway emits OTLP → OTel
-    API -->|"OTLP (metrics + traces)"| OTel
+    API -->|"OTLP gRPC (metrics + traces)"| OTel
+
+    %% Airflow emits OTLP HTTP → OTel
+    Airflow["Airflow\n(scheduler, workers)"]:::stream
+    Airflow -->|"OTLP HTTP :4318\n(metrics + traces)"| OTel
