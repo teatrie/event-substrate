@@ -144,6 +144,48 @@ ClickHouse authenticates as `clickhouse-consumer` and pipes the `internal.platfo
 
 ---
 
+## Batch Processing & Data Lineage (Spark + Airflow + Marquez)
+
+### Batch Layer Architecture ("Lambda-Lite")
+
+The platform uses **Apache Iceberg** as the bridge between streaming (Flink) and batch (Spark). Redpanda tiered storage auto-materializes all topics into Iceberg tables in MinIO. Spark reads these tables for complex join-heavy transformations that are too expensive for Flink. Airflow orchestrates Spark jobs on a schedule.
+
+**Execution flow:** Airflow DAG (scheduled trigger) → `KubernetesPodOperator` → ephemeral pod in `spark-apps` namespace → `spark-submit` with Iceberg + OpenLineage JARs → reads/writes Nessie-cataloged Iceberg tables.
+
+### Spark on Kubernetes
+
+- **Engine:** Spark 4.0.2 via Kubeflow Spark Operator 2.1.0 (`SparkApplication` CRD v1beta2)
+- **Code:** `pyspark_apps/` — domain-organized PySpark jobs (`identity/`, `media/`, `analytics/`) with shared `common/session.py` for Iceberg REST + S3A + OpenLineage config
+- **Docker:** Multi-stage `Dockerfile.spark` — `production` target (app only), `test` target (adds pytest). JARs baked in: Iceberg runtime, Hadoop-AWS, AWS SDK bundle, OpenLineage Spark listener
+- **Image naming:** `pyspark/{domain}-{job}:latest` (e.g., `pyspark/identity-daily-login-aggregates:latest`)
+- **K8s manifests:** `kubernetes/spark-apps/{domain}/{job}.yaml` — reference manifests with sparkConf (duplicates session.py for Operator path), emptyDir volumes for shuffle spill
+
+### Airflow Orchestration
+
+- **Deployment:** Self-managed via Helm chart 1.19.0 (Airflow 3.1.7) with KubernetesExecutor
+- **DAGs:** `airflow/dags/` mirrors `pyspark_apps/` domain structure (1:1 mapping). hostPath PV/PVC mounts DAGs into scheduler/processor pods (OrbStack maps macOS at `/mnt/mac`)
+- **Access:** `task airflow:ui` in a **separate terminal** → `http://localhost:8280` (admin/admin). Blocking `kubectl port-forward` — keep terminal open. In production, use Ingress/LoadBalancer
+- **RBAC:** Airflow worker service account has a Role + RoleBinding in the `spark-apps` namespace to create/delete pods for `KubernetesPodOperator`
+
+### Data Lineage (Marquez + OpenLineage)
+
+Two lineage sources emit to Marquez 0.49.0:
+
+| Source | Mechanism | Emits |
+|--------|-----------|-------|
+| Spark jobs | `openlineage-spark_2.13-1.42.1.jar` listener | START/COMPLETE/FAIL per Spark action, input/output datasets, row counts |
+| Airflow DAGs | Built-in `apache-airflow-providers-openlineage` | Per-task lineage (task run status, duration) |
+
+- **Marquez API:** `http://localhost:5050` — OpenLineage event receiver + REST queries
+- **Marquez Web UI:** `http://localhost:3001` — visual lineage graph
+- **Namespaces:** `spark` (all Spark jobs), `airflow` (all DAG tasks)
+
+### First Job: `identity/daily_login_aggregates`
+
+Reads Iceberg login + signup tables, joins on `user_id`, aggregates login counts per user per day, writes a partitioned aggregate table. Scheduled at 02:00 UTC daily. `--dt {{ ds }}` enables idempotent backfills (overwrites only the target partition).
+
+---
+
 ## Zero Trust Kafka Authentication (SASL/SCRAM)
 
 Every service authenticates to Redpanda with its own SASL/SCRAM-SHA-256 identity and is granted least-privilege ACLs. No anonymous Kafka connections are permitted.

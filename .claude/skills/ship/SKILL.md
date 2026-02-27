@@ -18,14 +18,42 @@ Run `git status` and `git diff --stat` to see all modified, untracked, and delet
 
 ### Step 1b: Ignore File Audit
 
-Before grouping, check `.gitignore` and `.claudeignore` against the untracked files:
+Before grouping, perform a two-part audit:
+
+**Part A — Check untracked files against known patterns:**
 
 - **Compiled binaries** (Go binaries, `.pyc`, `node_modules/`, `dist/`) — must be in `.gitignore`
 - **Cache/temp directories** (`.pytest_cache/`, `__pycache__/`, `.task/`, `tmp/`, `temp/`) — must be in `.gitignore`
 - **Auto-generated agent state** (`.claude/projects/`, `.claude/history/`) — must be in `.gitignore`
 - **Large non-essential files** (`go.sum`, vendor locks, binary assets) — should be in `.claudeignore` (context optimization, still tracked by git)
 
-If any untracked file should be ignored rather than committed, add the pattern to the appropriate ignore file and include that update in the first PR (or a dedicated housekeeping PR).
+**Part B — Scan the repo for new artifact types introduced by the current changes:**
+
+Run a broad search for common build/runtime artifacts that may not yet be in the ignore files:
+
+```bash
+# Find artifacts that might need ignoring
+find . -maxdepth 4 \( \
+  -name "*.egg-info" -o -name "*.pyc" -o -name "__pycache__" -o \
+  -name ".pytest_cache" -o -name "*.class" -o -name "*.jar" -o \
+  -name "derby.log" -o -name "metastore_db" -o -name "spark-warehouse" -o \
+  -name "*.log" -o -name "*.tmp" -o -name "*.swp" -o \
+  -name ".ivy2" -o -name ".m2" -o -name "target" -o \
+  -name "*.o" -o -name "*.so" -o -name "*.dylib" \
+\) -not -path "./.git/*" 2>/dev/null
+```
+
+For each artifact found, verify it's covered by `.gitignore`. If a new technology was introduced (e.g., Spark, Airflow, Marquez, a new language runtime), check for its common artifacts:
+
+| Technology | Common artifacts to ignore |
+|-----------|--------------------------|
+| PySpark | `derby.log`, `metastore_db/`, `spark-warehouse/`, `*.egg-info/` |
+| Java/Maven | `target/`, `.m2/`, `*.class`, `*.jar` (local builds) |
+| Airflow | `airflow.db`, `airflow-webserver.pid`, `logs/` |
+| Docker | `*.tar`, dangling layers (not in repo, but check for exported images) |
+| Terraform/Pulumi | `.terraform/`, `*.tfstate`, `Pulumi.*.yaml` (secrets) |
+
+If any artifact is present but not ignored, add the pattern to `.gitignore` (if it should never be tracked) or `.claudeignore` (if tracked by git but wasteful for AI context). Include ignore file updates in the first PR or a dedicated housekeeping PR.
 
 ### Step 2: Group into PRs
 

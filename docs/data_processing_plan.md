@@ -8,23 +8,24 @@ This document outlines the blueprint for integrating **Batch Processing** and **
 
 To maintain the project's goal of **Multicloud Portability**, we will utilize a native Kubernetes-first approach for all processing.
 
-### A. Batch Processing: Apache Spark on K8s
+### A. Batch Processing: Apache Spark on K8s ✅ IMPLEMENTED
+*   **Status**: Spark 4.0.2 with Kubeflow Spark Operator 2.1.0. First job: `identity/daily_login_aggregates` reads Iceberg login + signup tables, writes partitioned daily aggregates. Domain-organized code in `pyspark_apps/` with shared `common/session.py`. Multi-stage Dockerfile (production + test targets). OpenLineage Spark listener emits lineage to Marquez.
 *   **Engine**: **Spark on K8s Operator**.
 *   **Deployment**: Spark jobs are containerized and deployed as `SparkApplication` custom resources.
-*   **Why Operator?**: 
+*   **Why Operator?**:
     *   **Portability**: Identical execution on OrbStack (Local), GKE (GCP), and EKS (AWS).
     *   **Resource Efficiency**: Native K8s scheduling and executor scaling (ephemeral pods).
     *   **Unity**: Shares the same VPC, IAM/Workload Identity, and Namespace as the Go microservices and Flink jobs.
 
 ### B. Orchestration: Apache Airflow ✅ IMPLEMENTED
-*   **Status**: Skeleton deployed — Helm chart 1.16.0 (Airflow 2.10.5) with KubernetesExecutor, `hello_world` validation DAG.
-*   **Deployment**: Self-managed via **Helm** (Official Apache Airflow chart 1.16.0) on K8s.
+*   **Status**: Upgraded to Helm chart 1.19.0 (Airflow 3.1.7) with KubernetesExecutor, `hello_world` validation DAG + `identity/daily_login_aggregates` Spark trigger DAG. OpenLineage integration enabled (emits lineage to Marquez).
+*   **Deployment**: Self-managed via **Helm** (Official Apache Airflow chart 1.19.0) on K8s.
 *   **Executor**: **KubernetesExecutor**.
     *   Each Airflow task runs in its own isolated pod.
     *   Highly scalable and prevents a single heavy task from crashing the scheduler.
 *   **Local DAGs**: hostPath PV/PVC mounts `airflow/dags/` into scheduler and executor pods (OrbStack maps macOS at `/mnt/mac`).
 *   **Production DAGs**: git-sync sidecar polls `airflow/dags/` subpath (configured in `airflow/values-prod.yaml`).
-*   **Access**: `task airflow:ui` → `http://localhost:8280` (admin/admin).
+*   **Access**: `task airflow:ui` in a **separate terminal** → `http://localhost:8280` (admin/admin). This runs a blocking `kubectl port-forward` — keep the terminal open while using the UI. In production, an Ingress controller (nginx/Traefik) or LoadBalancer service replaces the port-forward.
 *   **Resources**: ~600m CPU, ~1.3Gi RAM total (fits alongside Flink on 8-core Mac).
 *   **Responsibility**:
     *   Triggering Spark jobs for Daily/Weekly aggregation.
@@ -67,10 +68,13 @@ While the core is portable via the Spark Operator, cloud-specific optimizations 
 To stay within the "Developer-First" monorepo philosophy:
 
 1.  **Code Structure**:
-    *   `spark_jobs/`: Contains Spark Scala/Python code and `Dockerfile.spark`.
-    *   `airflow/`: Contains DAG definitions, plugins, and requirements.
-2.  **Building**: 
-    *   `Taskfile.yml` will be updated with `task spark:build` and `task airflow:start`.
+    *   `pyspark_apps/`: Domain-organized PySpark jobs (`identity/`, `media/`, `analytics/`) with shared `common/session.py`. Each job co-locates `app.py`, tests, and fixtures.
+    *   `airflow/dags/`: DAGs mirror `pyspark_apps/` domain structure (1:1 mapping). Airflow recursively scans subdirectories.
+    *   `Dockerfile.spark`: Multi-stage build — `production` (app only), `test` (adds pytest + fixtures).
+2.  **Building**:
+    *   `task spark:build` — builds production Spark image. `task spark:test` / `task spark:test:docker` — runs unit tests.
+    *   `task airflow:install` / `task airflow:upgrade` — deploys/upgrades Airflow Helm chart.
+    *   `task lineage:start` — starts Marquez lineage stack.
 3.  **Deployment**:
     *   **Pulumi** will deploy the Airflow Helm chart and the Spark Operator.
     *   GitHub Actions will use **Path-Based Filtering** (from the `github_cicd_plan.md`) to only deploy Spark/Airflow changes when those directories are touched.
@@ -93,9 +97,11 @@ For the Event Substrate, we must choose between Cloud-Managed Airflow and Self-M
 
 ---
 
-## 6. Next Steps for Implementation
-1. **Spark Operator POC**: Install the Spark on K8s operator on the local OrbStack cluster.
-2. ~~**Airflow Helm Setup**~~: ✅ Done — Helm chart 1.16.0 deployed with KubernetesExecutor, hostPath DAG mount, and `hello_world` validation DAG. See `airflow/` directory.
-3. **Unified Iceberg Access**: Ensure Spark, Flink, and Trino all share the same **Polaris/Nessie** catalog.
-4. **Airflow Base Image**: Create a custom Airflow Docker image that includes the `kubectl` and `spark-submit` binaries.
-5. **Governance Integration**: Ensure Spark jobs follow **Apache Ranger** policies for row/column level redaction.
+## 6. Implementation Status
+1. ~~**Spark Operator POC**~~: ✅ Done — Kubeflow Spark Operator 2.1.0 installed. First SparkApplication: `identity/daily_login_aggregates` (Spark 4.0.2, Iceberg 1.10.1, PySpark). Domain-organized code in `pyspark_apps/`. Multi-stage Dockerfile with production + test targets.
+2. ~~**Airflow Helm Setup**~~: ✅ Done — Upgraded to Helm chart 1.19.0 (Airflow 3.1.7) with KubernetesExecutor, hostPath DAG mount. `hello_world` validation DAG + `identity/daily_login_aggregates` Spark trigger DAG.
+3. ~~**Data Lineage**~~: ✅ Done — Marquez 0.49.0 (API + Web UI + PostgreSQL) via docker-compose overlay. OpenLineage Spark listener (1.42.1) baked into Spark image. Airflow OpenLineage provider enabled via env vars. Both emit to Marquez.
+4. **Static Lineage Skill (`/lineage`)**: Build an agent skill that derives data lineage statically — without requiring the Marquez runtime stack. Parse Spark `app.py` (table reads/writes from CLI args), Flink SQL (`INSERT INTO ... SELECT FROM`), Nessie REST catalog (`GET /iceberg/v1/namespaces/{ns}/tables`), and Redpanda Schema Registry (`GET /subjects`) to build a dependency graph. Complements Marquez: static analysis answers "what does this job read/write?" instantly at dev time; Marquez answers runtime questions (run status, row counts, data freshness, failure history).
+5. **Unified Iceberg Access**: Ensure Spark, Flink, and Trino all share the same **Polaris/Nessie** catalog.
+6. **Airflow Base Image**: Create a custom Airflow Docker image that includes the `kubectl` and `spark-submit` binaries.
+7. **Governance Integration**: Ensure Spark jobs follow **Apache Ranger** policies for row/column level redaction.
