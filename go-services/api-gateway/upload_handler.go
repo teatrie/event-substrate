@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -107,7 +106,7 @@ func (h *UploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeInsufficientCredits(w)
 			return
 		}
-		log.Printf("Upload handler: credit check failed for user %s: %v", userID, err)
+		log.Error().Err(err).Str("user_id", userID).Msg("Upload handler: credit check failed")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -121,7 +120,7 @@ func (h *UploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	expiry := time.Duration(h.Config.StorageURLExpiry) * time.Second
 	uploadURL, err := h.Signer.GeneratePresignedPUT(h.Config.StorageBucketName, key, expiry)
 	if err != nil {
-		log.Printf("Upload handler: presigned URL generation failed: %v", err)
+		log.Error().Err(err).Msg("Upload handler: presigned URL generation failed")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

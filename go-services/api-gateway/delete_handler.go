@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 )
@@ -44,7 +43,7 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Look up file metadata
 	meta, err := h.Files.GetFileMetadata(r.Context(), req.FilePath, userID)
 	if err != nil {
-		log.Printf("Delete handler: file store error: %v", err)
+		log.Error().Err(err).Msg("Delete handler: file store error")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -56,7 +55,7 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Soft delete the file
 	_, err = h.Files.SoftDelete(r.Context(), req.FilePath, userID)
 	if err != nil {
-		log.Printf("Delete handler: soft delete failed: %v", err)
+		log.Error().Err(err).Msg("Delete handler: soft delete failed")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
