@@ -1,0 +1,19 @@
+[project]
+name = "pyspark-apps"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pyspark==4.0.2",
+    "defopt>=7.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["common*", "identity*", "media*", "analytics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["identity", "media", "analytics"]
+python_files = ["test_*.py"]

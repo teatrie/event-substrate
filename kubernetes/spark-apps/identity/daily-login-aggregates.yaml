@@ -1,0 +1,139 @@
+# kubernetes/spark-apps/identity/daily-login-aggregates.yaml
+#
+# SparkApplication CRD (sparkoperator.k8s.io/v1beta2) for the daily login
+# aggregates batch job.
+#
+# Reference manifest for manual `kubectl apply`. The Airflow DAG overrides
+# --dt with the actual execution date via Jinja templating ({{ ds }}).
+#
+# Prerequisites:
+#   task spark:install   (installs Spark Operator)
+#   kubectl create namespace spark-apps --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl create serviceaccount spark -n spark-apps --dry-run=client -o yaml | kubectl apply -f -
+---
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: daily-login-aggregates
+  namespace: spark-apps
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: pyspark/identity-daily-login-aggregates:latest
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: local:///opt/spark/work-dir/pyspark_apps/identity/daily_login_aggregates/app.py
+  arguments:
+    - "--catalog"
+    - "nessie"
+    - "--login-table"
+    - "nessie.redpanda.public_identity_login_events"
+    - "--signup-table"
+    - "nessie.redpanda.public_identity_signup_events"
+    - "--output-table"
+    - "nessie.silver.identity_daily_login_aggregates"
+    - "--dt"
+    - "2024-01-01"    # Airflow replaces with {{ ds }}
+  sparkVersion: "4.0.2"
+  restartPolicy:
+    type: Never         # Airflow handles retries at the task level
+
+  # ---------------------------------------------------------------------------
+  # Spark Configuration
+  #
+  # NOTE: This duplicates config from common/session.py. When the Spark Operator
+  # submits this job, sparkConf values are passed as --conf flags and take
+  # precedence over programmatic config. session.py remains the source of truth
+  # for non-Operator paths (unit tests, KubernetesPodOperator via Airflow DAG).
+  # This section is kept explicit to document what the Operator supports and to
+  # serve as a reference for tuning (shuffle partitions, AQE, volumes, etc.).
+  # ---------------------------------------------------------------------------
+  sparkConf:
+    # Iceberg catalog (REST protocol via Nessie)
+    "spark.sql.catalog.nessie": "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.nessie.type": "rest"
+    "spark.sql.catalog.nessie.uri": "http://host.docker.internal:19120/iceberg"
+    "spark.sql.catalog.nessie.io-impl": "org.apache.iceberg.aws.s3.S3FileIO"
+    "spark.sql.catalog.nessie.s3.endpoint": "http://host.docker.internal:9000"
+    "spark.sql.catalog.nessie.s3.path-style-access": "true"
+    "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+
+    # S3A filesystem (for direct S3 reads/writes)
+    "spark.hadoop.fs.s3a.endpoint": "http://host.docker.internal:9000"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+
+    # OpenLineage (emits START/COMPLETE/FAIL events to Marquez)
+    "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener"
+    "spark.openlineage.transport.type": "http"
+    "spark.openlineage.transport.url": "http://host.docker.internal:5050"
+    "spark.openlineage.namespace": "spark"
+
+    # Shuffle tuning — controls how many partitions are created during joins/aggregations.
+    # Default 200 is fine for moderate data. Reduce for small jobs (less overhead),
+    # increase for large jobs (smaller partitions = less memory per partition).
+    "spark.sql.shuffle.partitions": "10"
+
+    # Adaptive Query Execution — Spark dynamically coalesces small partitions
+    # and optimizes join strategies at runtime. Enabled by default in Spark 4.x.
+    "spark.sql.adaptive.enabled": "true"
+
+  # ---------------------------------------------------------------------------
+  # Driver Pod
+  # ---------------------------------------------------------------------------
+  driver:
+    cores: 1
+    memory: "1g"
+    serviceAccount: spark
+    env:
+      - name: CATALOG_URI
+        value: "http://host.docker.internal:19120/iceberg"
+      - name: S3_ENDPOINT
+        value: "http://host.docker.internal:9000"
+      - name: S3_ACCESS_KEY
+        value: "admin"
+      - name: S3_SECRET_KEY
+        value: "password"
+      - name: OPENLINEAGE_URL
+        value: "http://host.docker.internal:5050"
+      - name: OPENLINEAGE_NAMESPACE
+        value: "spark"
+    # Scratch space for shuffle spill, cached data, and temporary files.
+    # emptyDir uses the node's disk — sizeLimit prevents runaway spill
+    # from evicting the pod. For daily login aggregates this is generous;
+    # heavier jobs (historical backfills) may need 20-50Gi or a PVC.
+    volumeMounts:
+      - name: spark-local
+        mountPath: /tmp/spark-local
+
+  # ---------------------------------------------------------------------------
+  # Executor Pods
+  # ---------------------------------------------------------------------------
+  executor:
+    cores: 1
+    instances: 1
+    memory: "1g"
+    env:
+      - name: CATALOG_URI
+        value: "http://host.docker.internal:19120/iceberg"
+      - name: S3_ENDPOINT
+        value: "http://host.docker.internal:9000"
+      - name: S3_ACCESS_KEY
+        value: "admin"
+      - name: S3_SECRET_KEY
+        value: "password"
+      - name: OPENLINEAGE_URL
+        value: "http://host.docker.internal:5050"
+      - name: OPENLINEAGE_NAMESPACE
+        value: "spark"
+    volumeMounts:
+      - name: spark-local
+        mountPath: /tmp/spark-local
+
+  # ---------------------------------------------------------------------------
+  # Volumes
+  # ---------------------------------------------------------------------------
+  volumes:
+    - name: spark-local
+      emptyDir:
+        sizeLimit: 5Gi

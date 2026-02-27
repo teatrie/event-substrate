@@ -1,0 +1,8 @@
+# pyspark_apps/.dockerignore — patterns excluded from the production Docker image.
+#
+# Used as reference for BuildKit --exclude flags in Dockerfile.spark (production stage).
+# Tests are included in the `test` stage but excluded from `production`.
+
+**/tests/
+**/__pycache__/
+**/*.pyc

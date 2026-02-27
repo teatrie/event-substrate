@@ -1,0 +1,6 @@
+[
+  {"user_id": "user-1", "login_time": "2024-01-15T10:30:00Z", "email": "alice@example.com"},
+  {"user_id": "user-1", "login_time": "2024-01-15T14:00:00Z", "email": "alice@example.com"},
+  {"user_id": "user-2", "login_time": "2024-01-15T09:00:00Z", "email": "bob@example.com"},
+  {"user_id": "user-3", "login_time": "2024-01-14T23:59:00Z", "email": "charlie@example.com"}
+]
