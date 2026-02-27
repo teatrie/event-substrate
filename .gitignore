@@ -16,6 +16,13 @@ api-gateway-test
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+.pytest_cache/
+
+# Spark local artifacts (created when running PySpark tests locally)
+derby.log
+metastore_db/
+spark-warehouse/
 
 # Environment/Secrets
 .env

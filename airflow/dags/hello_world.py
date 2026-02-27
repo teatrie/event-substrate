@@ -12,8 +12,8 @@ ran in its own K8s pod, was scheduled, executed, and cleaned up.
 from datetime import datetime
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import PythonOperator
 
 
 def _python_hello():
