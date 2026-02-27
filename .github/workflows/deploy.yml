@@ -1,0 +1,102 @@
+# deploy.yml — Staging + Production deployment pipeline
+#
+# This workflow deploys the event-substrate platform to staging (automatically)
+# and production (with manual approval). It uses GitHub Environments with
+# protection rules for the production gate.
+#
+# Prerequisites (to be configured when cloud infra is ready):
+#   1. Create GitHub Environments: "staging" and "production"
+#   2. Add required reviewers to "production" environment
+#   3. Configure Pulumi access token as repository secret: PULUMI_ACCESS_TOKEN
+#   4. Configure cloud provider credentials (AWS/GCP) as repository secrets
+#   5. Update image references in Pulumi stacks to use GHCR images
+#
+# Deploy strategy: Model 4 (Hybrid)
+#   - CI builds run per-merge (parallel, path-filtered)
+#   - Deploys batch via concurrency group — latest commit on main wins
+#   - One manual approval gate covers all changes since last production deploy
+#   - Images are tagged with git SHA and never rebuilt — promotion is "point to SHA"
+#
+# Flow:
+#   PR merged to main
+#     → CI workflow builds + pushes :sha images to GHCR
+#     → This workflow auto-deploys to staging
+#     → E2E tests run against staging
+#     → Manual approval gate
+#     → Deploy to production (same :sha images)
+#
+# Rollback:
+#   Option 1: helm rollback event-substrate <revision> --namespace <ns>
+#   Option 2: Re-run this workflow for a previous commit (GitHub Actions UI)
+#   Option 3: Revert the commit on main → triggers fresh deploy of old state
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+# Only one staging deploy at a time — latest commit wins.
+# If a new commit lands while staging is deploying, the in-flight deploy
+# is cancelled and replaced with the newer commit (which includes all changes).
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Stage 1: Deploy to Staging (automatic)
+  # -------------------------------------------------------------------------
+  # deploy-staging:
+  #   runs-on: ubuntu-latest
+  #   environment: staging
+  #   permissions:
+  #     contents: read
+  #     packages: read
+  #     id-token: write          # for cloud provider OIDC auth
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     # TODO: Install Pulumi CLI
+  #     # - uses: pulumi/actions@v5
+  #     #   with:
+  #     #     command: up
+  #     #     stack-name: staging
+  #     #     cloud-url: <pulumi-backend-url>
+  #     #   env:
+  #     #     PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+  #
+  #     # TODO: Run smoke tests / E2E against staging
+  #     # - name: Run staging E2E tests
+  #     #   run: ./scripts/smoke-test-staging.sh
+  #     #   env:
+  #     #     STAGING_URL: ${{ vars.STAGING_URL }}
+
+  # -------------------------------------------------------------------------
+  # Stage 2: Deploy to Production (manual approval)
+  # -------------------------------------------------------------------------
+  # deploy-production:
+  #   needs: deploy-staging
+  #   runs-on: ubuntu-latest
+  #   environment: production    # <-- triggers manual approval gate
+  #   permissions:
+  #     contents: read
+  #     packages: read
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     # TODO: Install Pulumi CLI
+  #     # - uses: pulumi/actions@v5
+  #     #   with:
+  #     #     command: up
+  #     #     stack-name: production
+  #     #     cloud-url: <pulumi-backend-url>
+  #     #   env:
+  #     #     PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+  #
+  #     # TODO: Run smoke tests against production
+  #     # - name: Run production smoke tests
+  #     #   run: ./scripts/smoke-test-production.sh
+  #     #   env:
+  #     #     PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
