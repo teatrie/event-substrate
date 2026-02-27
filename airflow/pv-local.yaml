@@ -1,0 +1,38 @@
+# PersistentVolume + PersistentVolumeClaim for local DAG development.
+#
+# OrbStack maps macOS paths at /mnt/mac, so the hostPath below points
+# directly to the repo's airflow/dags/ directory. Any file saved on
+# the Mac is immediately visible inside scheduler and executor pods.
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: airflow-dags-pv
+  labels:
+    purpose: airflow-dags
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /mnt/mac/Users/kt/code/event-substrate/airflow/dags
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-pvc
+  namespace: airflow
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 1Gi
+  selector:
+    matchLabels:
+      purpose: airflow-dags

@@ -23,7 +23,8 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 *   **Analytical Warehouse:** ClickHouse (Real-Time OLAP)
 *   **Build System:** Task (go-task) with incremental change detection
 *   **Monitoring:** OpenTelemetry + Prometheus + Grafana + Jaeger
-*   **Data Pipeline:** Apache Spark + Airflow (Planned)
+*   **Batch Orchestration:** Apache Airflow 2.10.5 (Helm on K8s, KubernetesExecutor)
+*   **Data Pipeline:** Apache Spark (Planned)
 
 ---
 
@@ -101,6 +102,7 @@ When extending or maintaining this platform, **strict adherence to framework and
 ## Directory Structure
 - `Taskfile.yml`: Build system definition with incremental change detection for Go services.
 - `avro/`: Avro schemas organized by domain (e.g., `avro/public/identity/login.events.avsc`). Directory paths map to Kafka topic names.
+- `airflow/`: Airflow DAGs, Helm values (local + prod), and PV/PVC manifests for KubernetesExecutor deployment.
 - `clickhouse/`: Initialization SQL scripts for the embedded analytical datastore.
 - `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
 - `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
@@ -194,6 +196,20 @@ task shutdown
 | `task k8s:configmaps` | Reload Flink SQL/Python ConfigMaps from source (required before redeploying Flink jobs) |
 | `task k8s:flink` | Deploy all Flink jobs to Kubernetes |
 | `task k8s:go-services` | Build and deploy Go microservices to K8s |
+
+**Airflow**
+
+| Command | Description |
+|---|---|
+| `task airflow:install` | Install Airflow on K8s via Helm (creates namespace, PV/PVC, deploys chart) |
+| `task airflow:upgrade` | Upgrade Airflow Helm release with current values |
+| `task airflow:ui` | Port-forward Airflow webserver to `http://localhost:8280` (admin/admin) |
+| `task airflow:status` | Show Airflow pod status |
+| `task airflow:start` | Scale Airflow deployments back to 1 |
+| `task airflow:shutdown` | Scale Airflow deployments to 0 |
+| `task airflow:purge` | Uninstall Airflow — Helm release, PV/PVC, namespace |
+| `task airflow:logs:scheduler` | Tail Airflow scheduler logs |
+| `task airflow:logs:webserver` | Tail Airflow webserver logs |
 
 **Testing**
 

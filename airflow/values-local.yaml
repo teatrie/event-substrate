@@ -1,0 +1,97 @@
+# Airflow Helm chart values — local development (OrbStack K8s).
+#
+# Chart: apache-airflow/airflow 1.16.0 (Airflow 2.10.5)
+# Executor: KubernetesExecutor (each task = isolated pod)
+# DAGs: hostPath PVC (airflow-dags-pvc) — edit on Mac, see in pods instantly
+# DB: embedded PostgreSQL (Helm subchart)
+# Auth: admin / admin (webserverSecretKey is dev-only)
+# Resources: ~550m CPU requests, ~1.15Gi RAM requests (burst to 1.5 CPU / 2Gi)
+# -------------------------------------------------------------------
+
+# -- Executor ----------------------------------------------------------
+executor: KubernetesExecutor
+
+# -- Web server --------------------------------------------------------
+webserver:
+  defaultUser:
+    enabled: true
+    username: admin
+    password: admin
+    firstName: Admin
+    lastName: User
+    email: admin@example.com
+    role: Admin
+  # Gunicorn cold-starts 2 workers loading all providers; needs CPU headroom.
+  startupProbe:
+    failureThreshold: 30          # 30 * 10s = 300s for gunicorn cold start
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# -- Scheduler ---------------------------------------------------------
+scheduler:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+
+# -- Triggerer (required for deferrable operators) ---------------------
+triggerer:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
+# -- PostgreSQL subchart (embedded, dev only) --------------------------
+# Pin to :latest — bitnami prunes specific version tags from Docker Hub.
+postgresql:
+  enabled: true
+  image:
+    tag: latest
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
+# -- Redis (not needed for KubernetesExecutor) -------------------------
+redis:
+  enabled: false
+
+# -- StatsD (disable to save resources) --------------------------------
+statsd:
+  enabled: false
+
+# -- DAG volume (hostPath PVC created by pv-local.yaml) ----------------
+dags:
+  persistence:
+    enabled: true
+    existingClaim: airflow-dags-pvc
+
+# -- Secret key (dev only — not for production) ------------------------
+webserverSecretKey: dev-secret-key-change-in-prod
+
+# -- Config overrides --------------------------------------------------
+config:
+  api:
+    auth_backends: "airflow.api.auth.backend.basic_auth"
+  core:
+    load_examples: "False"
+  webserver:
+    expose_config: "True"
+    warn_deployment_exposure: "False"
+    workers: "2"
