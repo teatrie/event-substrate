@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -128,7 +127,7 @@ func initMediaHandlers(produceEvent EventProducer) *MediaHandlers {
 	// Connect to Postgres for credit balance and file metadata queries
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Printf("WARNING: Failed to open DB for media handlers: %v", err)
+		log.Warn().Err(err).Msg("Failed to open DB for media handlers")
 		return nil
 	}
 	db.SetMaxOpenConns(5)
@@ -136,7 +135,7 @@ func initMediaHandlers(produceEvent EventProducer) *MediaHandlers {
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
-		log.Printf("WARNING: DB ping failed for media handlers: %v", err)
+		log.Warn().Err(err).Msg("DB ping failed for media handlers")
 		return nil
 	}
 
@@ -151,7 +150,7 @@ func initMediaHandlers(produceEvent EventProducer) *MediaHandlers {
 		Region: "us-east-1",
 	})
 	if err != nil {
-		log.Printf("WARNING: Failed to create MinIO client: %v", err)
+		log.Warn().Err(err).Msg("Failed to create MinIO client")
 		return nil
 	}
 
@@ -167,7 +166,11 @@ func initMediaHandlers(produceEvent EventProducer) *MediaHandlers {
 	signer := &MinioURLSigner{Client: minioClient}
 	fileStore := &PostgresFileStore{DB: db}
 
-	log.Printf("Media handlers initialized: bucket=%s endpoint=%s (public=%s)", storageBucket, storageEndpoint, storagePublicEndpoint)
+	log.Info().
+		Str("bucket", storageBucket).
+		Str("endpoint", storageEndpoint).
+		Str("public_endpoint", storagePublicEndpoint).
+		Msg("Media handlers initialized")
 
 	return &MediaHandlers{
 		Upload: &UploadHandler{

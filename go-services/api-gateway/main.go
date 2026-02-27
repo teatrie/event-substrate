@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -23,11 +22,19 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hamba/avro/v2"
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 	"github.com/twmb/franz-go/pkg/sr"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	otelmetric "go.opentelemetry.io/otel/metric"
 )
+
+// log is the package-level structured logger. It shadows the stdlib "log" package
+// intentionally so all log calls use zerolog's builder pattern.
+var log = zerolog.New(os.Stderr).With().Timestamp().Logger()
 
 // CachedSchema holds the parsed schema ID and compiled Avro layout to prevent repetitive HTTP lookups
 type CachedSchema struct {
@@ -49,6 +56,9 @@ var (
 	jwtSecret      []byte
 	ecdsaPublicKey *ecdsa.PublicKey
 	webhookSecret  string
+
+	// OTel Kafka metrics
+	kafkaMessagesTotal otelmetric.Int64Counter
 )
 
 // fetchJWKS fetches the JWKS from a Supabase auth endpoint and extracts the EC public key.
@@ -118,13 +128,13 @@ func loadConfig() {
 	viper.AddConfigPath(".")    // Local fallback
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("Warning: Could not read config file: %v", err)
+		log.Warn().Err(err).Msg("Could not read config file")
 	} else {
 		updateConfig()
 	}
 
 	viper.OnConfigChange(func(e fsnotify.Event) {
-		log.Println("Config file changed dynamically via fsnotify:", e.Name)
+		log.Info().Str("file", e.Name).Msg("Config file changed dynamically via fsnotify")
 		updateConfig()
 	})
 	viper.WatchConfig()
@@ -133,13 +143,16 @@ func loadConfig() {
 func updateConfig() {
 	var newConfig Config
 	if err := viper.Unmarshal(&newConfig); err != nil {
-		log.Printf("Unable to decode routes.yaml into Config struct: %v", err)
+		log.Error().Err(err).Msg("Unable to decode routes.yaml into Config struct")
 		return
 	}
 	configMu.Lock()
 	appConfig = newConfig
 	configMu.Unlock()
-	log.Printf("Loaded Zero-Downtime Routes Config: Webhook=%d allowed topics, External=%d allowed topics", len(newConfig.WebhookRoutes), len(newConfig.ExternalRoutes))
+	log.Info().
+		Int("webhook_topics", len(newConfig.WebhookRoutes)).
+		Int("external_topics", len(newConfig.ExternalRoutes)).
+		Msg("Loaded Zero-Downtime Routes Config")
 }
 
 func fetchAndCacheSchema(ctx context.Context, topic string) (*CachedSchema, error) {
@@ -150,7 +163,7 @@ func fetchAndCacheSchema(ctx context.Context, topic string) (*CachedSchema, erro
 	}
 
 	// Cache miss: Execute HTTP request to Confluent Schema Registry
-	log.Printf("Schema not found locally for topic '%s'. Fetching from registry...", topic)
+	log.Info().Str("topic", topic).Msg("Schema not found locally. Fetching from registry...")
 	schemaSubject, err := srClient.SchemaByVersion(ctx, subject, -1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch latest schema for subject '%s': %w", subject, err)
@@ -168,7 +181,10 @@ func fetchAndCacheSchema(ctx context.Context, topic string) (*CachedSchema, erro
 		Schema: avroSchema,
 	}
 	schemaCache.Store(subject, cached)
-	log.Printf("Successfully cached Schema ID %d for topic '%s'", cached.ID, topic)
+	log.Info().
+		Int("schema_id", cached.ID).
+		Str("topic", topic).
+		Msg("Successfully cached schema")
 
 	return cached, nil
 }
@@ -235,7 +251,7 @@ func processAndProduceEvent(ctx context.Context, w http.ResponseWriter, r *http.
 	decoder := json.NewDecoder(bytes.NewReader(bodyBytes))
 	decoder.UseNumber()
 	if err := decoder.Decode(&event); err != nil {
-		log.Printf("Invalid JSON formatting for topic '%s': %v", topicName, err)
+		log.Error().Err(err).Str("topic", topicName).Msg("Invalid JSON formatting")
 		http.Error(w, "Invalid JSON structure", http.StatusBadRequest)
 		return
 	}
@@ -247,7 +263,7 @@ func processAndProduceEvent(ctx context.Context, w http.ResponseWriter, r *http.
 	// Attempt to resolve the targeted Avro schema dynamically from memory cache or Confluent DB
 	cachedSchema, err := fetchAndCacheSchema(ctx, topicName)
 	if err != nil {
-		log.Printf("Schema Resolution Failed for %s: %v", topicName, err)
+		log.Error().Err(err).Str("topic", topicName).Msg("Schema resolution failed")
 		http.Error(w, fmt.Sprintf("Failed to resolve schema registry formatting for topic: %s", topicName), http.StatusBadRequest)
 		return
 	}
@@ -255,7 +271,7 @@ func processAndProduceEvent(ctx context.Context, w http.ResponseWriter, r *http.
 	// Serialize the generic map[string]any using the fetched Avro definition map
 	avroPayload, err := encodeAvro(cachedSchema.ID, cachedSchema.Schema, event)
 	if err != nil {
-		log.Printf("Failed to encode payload against dynamic avro map for %s: %v", topicName, err)
+		log.Error().Err(err).Str("topic", topicName).Msg("Failed to encode payload against dynamic avro map")
 		http.Error(w, "Internal schema formatting violation", http.StatusBadRequest)
 		return
 	}
@@ -263,9 +279,26 @@ func processAndProduceEvent(ctx context.Context, w http.ResponseWriter, r *http.
 	// Send to Redpanda asynchronously under the structurally derived topic
 	record := &kgo.Record{Topic: topicName, Value: avroPayload}
 	// Use async producing (Promise) rather than ProduceSync per HTTP request for performance
-	kafkaClient.Produce(context.Background(), record, func(_ *kgo.Record, err error) {
-		if err != nil {
-			log.Printf("Failed to produce async record to redpanda cluster topic '%s': %v", topicName, err)
+	kafkaClient.Produce(context.Background(), record, func(_ *kgo.Record, produceErr error) {
+		if produceErr != nil {
+			log.Error().Err(produceErr).Str("topic", topicName).Msg("Failed to produce async record to redpanda cluster topic")
+			if kafkaMessagesTotal != nil {
+				kafkaMessagesTotal.Add(context.Background(), 1,
+					otelmetric.WithAttributes(
+						topicAttr(topicName),
+						statusAttr("error"),
+					),
+				)
+			}
+		} else {
+			if kafkaMessagesTotal != nil {
+				kafkaMessagesTotal.Add(context.Background(), 1,
+					otelmetric.WithAttributes(
+						topicAttr(topicName),
+						statusAttr("success"),
+					),
+				)
+			}
 		}
 	})
 
@@ -299,7 +332,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	configMu.RUnlock()
 
 	if !exists {
-		log.Printf("Blocked unauthorized webhook attempt to target missing topic key: %s", topicKey)
+		log.Warn().Str("topic_key", topicKey).Msg("Blocked unauthorized webhook attempt to target missing topic key")
 		http.Error(w, "Forbidden (Topic mapping not found in allowlist)", http.StatusForbidden)
 		return
 	}
@@ -330,7 +363,7 @@ func externalHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		log.Println("WARNING: No JWT verification key configured. Bypassing token signature validation.")
+		log.Warn().Msg("No JWT verification key configured. Bypassing token signature validation.")
 	}
 
 	// 2. Map route mapping from URL (e.g. /api/v1/events/click)
@@ -347,7 +380,7 @@ func externalHandler(w http.ResponseWriter, r *http.Request) {
 	configMu.RUnlock()
 
 	if !exists {
-		log.Printf("Blocked unauthorized external client attempt to target missing topic key: %s", topicKey)
+		log.Warn().Str("topic_key", topicKey).Msg("Blocked unauthorized external client attempt to target missing topic key")
 		http.Error(w, "Forbidden (Topic mapping not found in allowlist)", http.StatusForbidden)
 		return
 	}
@@ -394,16 +427,16 @@ func main() {
 	if jwksURL != "" {
 		pubKey, err := fetchJWKS(jwksURL)
 		if err != nil {
-			log.Printf("WARNING: Failed to fetch JWKS from %s: %v", jwksURL, err)
+			log.Warn().Err(err).Str("jwks_url", jwksURL).Msg("Failed to fetch JWKS")
 		} else {
 			ecdsaPublicKey = pubKey
-			log.Printf("ECDSA (ES256) JWT verification enabled via JWKS from %s", jwksURL)
+			log.Info().Str("jwks_url", jwksURL).Msg("ECDSA (ES256) JWT verification enabled via JWKS")
 		}
 	}
 
 	webhookSecret = os.Getenv("WEBHOOK_SECRET")
 	if webhookSecret == "" {
-		log.Println("WARNING: WEBHOOK_SECRET is not set. Internal webhooks are missing token validation defense.")
+		log.Warn().Msg("WEBHOOK_SECRET is not set. Internal webhooks are missing token validation defense.")
 	}
 
 	// Load SASL Configuration
@@ -411,13 +444,32 @@ func main() {
 	saslUser := os.Getenv("KAFKA_SASL_USERNAME")
 	saslPass := os.Getenv("KAFKA_SASL_PASSWORD")
 
-	log.Println("Starting Secure Dual-Ingress Go API Gateway...")
-
-	// 0. Bootstrap Hot-Reloading Configuration
-	loadConfig()
+	log.Info().Msg("Starting Secure Dual-Ingress Go API Gateway...")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	// 0. Initialise OpenTelemetry (non-fatal — gateway starts even if OTel is unavailable)
+	otelShutdown, otelErr := initOTel(ctx, "api-gateway")
+	if otelErr != nil {
+		log.Warn().Err(otelErr).Msg("OTel initialisation failed — metrics and traces disabled")
+	} else {
+		defer otelShutdown(context.Background()) //nolint:errcheck
+		log.Info().Msg("OpenTelemetry initialised")
+	}
+
+	// 0a. Create custom Kafka metrics counter
+	meter := otel.Meter("api-gateway")
+	kafkaMessagesTotal, err = meter.Int64Counter(
+		"kafka.producer.messages.total",
+		otelmetric.WithDescription("Total number of Kafka messages produced"),
+	)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to create kafka.producer.messages.total counter")
+	}
+
+	// 0b. Bootstrap Hot-Reloading Configuration
+	loadConfig()
 
 	// 1. Setup global Kafka Client for Produce
 	kgoOpts := []kgo.Opt{
@@ -427,28 +479,34 @@ func main() {
 		switch saslMechanism {
 		case "SCRAM-SHA-256":
 			kgoOpts = append(kgoOpts, kgo.SASL(scram.Auth{User: saslUser, Pass: saslPass}.AsSha256Mechanism()))
-			log.Printf("SASL/SCRAM-SHA-256 enabled for Kafka user '%s'", saslUser)
+			log.Info().Str("user", saslUser).Msg("SASL/SCRAM-SHA-256 enabled for Kafka")
 		case "SCRAM-SHA-512":
 			kgoOpts = append(kgoOpts, kgo.SASL(scram.Auth{User: saslUser, Pass: saslPass}.AsSha512Mechanism()))
-			log.Printf("SASL/SCRAM-SHA-512 enabled for Kafka user '%s'", saslUser)
+			log.Info().Str("user", saslUser).Msg("SASL/SCRAM-SHA-512 enabled for Kafka")
 		default:
-			log.Printf("WARNING: Unknown KAFKA_SASL_MECHANISM '%s', connecting without SASL", saslMechanism)
+			log.Warn().Str("mechanism", saslMechanism).Msg("Unknown KAFKA_SASL_MECHANISM, connecting without SASL")
 		}
 	}
 	kafkaClient, err = kgo.NewClient(kgoOpts...)
 	if err != nil {
-		log.Fatalf("unable to create kafka client: %v", err)
+		log.Fatal().Err(err).Msg("unable to create kafka client")
 	}
 	defer kafkaClient.Close()
 
 	// 2. Setup global Schema Registry Client
 	srClient, err = sr.NewClient(sr.URLs(srEnv))
 	if err != nil {
-		log.Fatalf("unable to create schema registry client: %v", err)
+		log.Fatal().Err(err).Msg("unable to create schema registry client")
 	}
 
 	// 3. HTTP Server configuration - Splitting branches cleanly for strict access matrices
 	mux := http.NewServeMux()
+
+	// Health endpoints (registered before otelhttp wrapper — they don't need tracing)
+	readiness := &kafkaReadinessChecker{}
+	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("/readyz", readyzHandler(readiness))
+
 	mux.HandleFunc("/webhooks/", webhookHandler)
 	mux.HandleFunc("/api/v1/events/", externalHandler)
 
@@ -475,7 +533,7 @@ func main() {
 		mux.Handle("/api/v1/media/download-url", handlers.Download)
 		mux.Handle("/api/v1/media/delete", handlers.Delete)
 	} else {
-		log.Println("WARNING: Media handlers not initialized — /api/v1/media/* will be unavailable")
+		log.Warn().Msg("Media handlers not initialized — /api/v1/media/* will be unavailable")
 	}
 
 	// Wire async media intent endpoints (Upload Saga)
@@ -484,18 +542,22 @@ func main() {
 	mux.Handle("/api/v1/media/download-intent", intentHandler)
 	mux.Handle("/api/v1/media/delete-intent", intentHandler)
 
-	server := &http.Server{Addr: ":8080", Handler: corsMiddleware(mux)}
+	// Wrap the entire mux with OTel HTTP instrumentation for automatic
+	// http.server.request.duration and http.server.active_requests metrics + traces.
+	instrumentedHandler := otelhttp.NewHandler(corsMiddleware(mux), "api-gateway")
+
+	server := &http.Server{Addr: ":8080", Handler: instrumentedHandler}
 
 	go func() {
-		log.Println("Listening for internal webhook traffic on :8080/webhooks/{topic}...")
-		log.Println("Listening for authenticated external traffic on :8080/api/v1/events/{topic}...")
+		log.Info().Msg("Listening for internal webhook traffic on :8080/webhooks/{topic}...")
+		log.Info().Msg("Listening for authenticated external traffic on :8080/api/v1/events/{topic}...")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen error: %s\n", err)
+			log.Fatal().Err(err).Msg("listen error")
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("Shutting down gracefully...")
+	log.Info().Msg("Shutting down gracefully...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

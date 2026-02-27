@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +36,7 @@ func (h *FileReadyWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 
 	var event minioEvent
 	if err := json.Unmarshal(body, &event); err != nil {
-		log.Printf("Failed to parse MinIO event: %v", err)
+		log.Error().Err(err).Msg("Failed to parse MinIO event")
 		http.Error(w, "Invalid event format", http.StatusBadRequest)
 		return
 	}
@@ -49,7 +48,7 @@ func (h *FileReadyWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 
 		if !strings.HasPrefix(objectKey, "files/") {
-			log.Printf("Skipping non-files object key: %s", objectKey)
+			log.Info().Str("object_key", objectKey).Msg("Skipping non-files object key")
 			continue
 		}
 
@@ -65,12 +64,12 @@ func (h *FileReadyWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 
 		if err := h.producer.Produce(r.Context(), fileReadyTopic, payload); err != nil {
-			log.Printf("Failed to produce file.ready: %v", err)
+			log.Error().Err(err).Msg("Failed to produce file.ready")
 			http.Error(w, "Failed to produce event", http.StatusInternalServerError)
 			return
 		}
 
-		log.Printf("Produced FileReady for path=%s", objectKey)
+		log.Info().Str("file_path", objectKey).Msg("Produced FileReady")
 		w.WriteHeader(http.StatusOK)
 		return
 	}

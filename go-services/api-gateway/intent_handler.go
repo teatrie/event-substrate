@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -61,7 +60,7 @@ func (h *IntentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.ProduceEvent(r.Context(), topic, payload); err != nil {
-		log.Printf("Intent handler: failed to produce %s event: %v", intentType, err)
+		log.Error().Err(err).Str("intent_type", intentType).Msg("Intent handler: failed to produce event")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

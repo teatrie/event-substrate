@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 )
 
 // MessageHandler processes a deserialized Kafka event payload.
@@ -25,11 +24,11 @@ func NewTopicRouter(handlers map[string]MessageHandler) *TopicRouter {
 func (r *TopicRouter) Route(ctx context.Context, topic string, payload map[string]any) bool {
 	handler, ok := r.handlers[topic]
 	if !ok {
-		log.Printf("No handler for topic: %s (skipping)", topic)
+		log.Warn().Str("topic", topic).Msg("No handler for topic (skipping)")
 		return false
 	}
 	if err := handler.Handle(ctx, payload); err != nil {
-		log.Printf("Handler error for topic %s: %v", topic, err)
+		log.Error().Err(err).Str("topic", topic).Msg("Handler error")
 	}
 	return true
 }

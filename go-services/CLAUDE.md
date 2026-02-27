@@ -65,3 +65,75 @@ Dedicated Kafka consumer + HTTP webhook service owning MinIO presigned URLs, fil
 ## Credit Economy
 
 `credit_ledger` (append-only, INSERT-only) + `user_credit_balances` (aggregated SUM view). Signup grants +2 credits, each upload intent costs 1 credit (deducted atomically in PyFlink). Expired uploads refund +1 credit. Event type: `credit.balance_changed`. `media_files` uses a `status` column for soft-delete.
+
+## Observability & Instrumentation
+
+### OpenTelemetry (OTel) Setup
+Every Go service initializes OTel in `otel.go` via `initOTel()` called early in `main()`. The pattern:
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/sdk/metric"
+    "go.opentelemetry.io/otel/sdk/trace"
+    "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+)
+
+func initOTel() error {
+    // Initialize trace provider → OTLP gRPC exporter
+    // Initialize meter provider → OTLP gRPC exporter
+    // Set global TracerProvider and MeterProvider
+}
+```
+The `OTEL_EXPORTER_OTLP_ENDPOINT` env var (default `http://host.docker.internal:4317`) is read automatically by the OTel SDK — no manual parsing needed.
+
+### Structured Logging (zerolog)
+All services replace stdlib `log` with zerolog:
+```go
+var log = zerolog.New(os.Stderr).With().Timestamp().Logger()
+```
+This pattern:
+- Outputs JSON to stderr (captured by Docker logging driver + Loki)
+- `var log` shadows stdlib `log` package — this is intentional and allows gradual migration
+- Includes automatic `timestamp` field in every log line
+- Structured fields: `log.Info().Str("user_id", uid).Msg("user created")`
+
+### Health Endpoints
+Every Go service exposes two health check endpoints on port 8080:
+- **`GET /healthz`** — Liveness probe. Always returns 200 OK. Used by K8s liveness probe to restart dead pods.
+- **`GET /readyz`** — Readiness probe. Checks downstream dependencies:
+  - Kafka broker connectivity (via live consumer group or producer)
+  - Postgres connection pool (SELECT 1)
+  - Returns 200 only when all are healthy. Used by K8s readiness probe to remove unhealthy pods from load balancer.
+
+The health handlers DO NOT require authentication — they're internal network-only (port 8080, not exposed to frontend).
+
+### HTTP Auto-Instrumentation
+All HTTP handlers are wrapped with `otelhttp.NewHandler()`:
+```go
+mux.Handle("/api/v1/events/{topic}", otelhttp.NewHandler(
+    http.HandlerFunc(eventHandler),
+    "POST /api/v1/events/{topic}",
+))
+```
+This auto-generates:
+- `http.server.request.duration` (histogram, milliseconds)
+- `http.server.active_requests` (gauge, per-operation)
+- `http.server.request.body.size` (histogram, bytes)
+- Trace spans with operation name as span name
+
+### Custom Kafka Metrics
+Each service exposes three custom metrics via a meter:
+```go
+kafkaProducer := meter.Int64Counter("kafka.producer.messages.total")
+kafkaConsumer := meter.Int64Counter("kafka.consumer.messages.total")
+kafkaErrors := meter.Int64Counter("kafka.consumer.errors.total")
+```
+Updated on each message:
+- Producer: incremented when producing events to Kafka
+- Consumer: incremented after successful message processing
+- Errors: incremented when message processing fails
+
+### Environment Variables
+*   `OTEL_EXPORTER_OTLP_ENDPOINT` — OTel Collector OTLP gRPC endpoint (default: `http://host.docker.internal:4317`)
+*   `LOG_LEVEL` — zerolog level (default: `info`, options: `debug`, `warn`, `error`)

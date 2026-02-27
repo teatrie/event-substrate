@@ -48,6 +48,20 @@ spec:
           value: "password"
         - name: MINIO_BUCKET
           value: "media-uploads"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://host.docker.internal:4317"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
         volumeMounts:
         - name: routes-config
           mountPath: /app/routes.yaml

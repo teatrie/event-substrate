@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 )
@@ -44,7 +43,7 @@ func (h *DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Look up file metadata
 	meta, err := h.Files.GetFileMetadata(r.Context(), req.FilePath, userID)
 	if err != nil {
-		log.Printf("Download handler: file store error: %v", err)
+		log.Error().Err(err).Msg("Download handler: file store error")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -57,7 +56,7 @@ func (h *DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	expiry := time.Duration(h.Config.StorageURLExpiry) * time.Second
 	downloadURL, err := h.Signer.GeneratePresignedGET(h.Config.StorageBucketName, meta.FilePath, expiry)
 	if err != nil {
-		log.Printf("Download handler: presigned GET generation failed: %v", err)
+		log.Error().Err(err).Msg("Download handler: presigned GET generation failed")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

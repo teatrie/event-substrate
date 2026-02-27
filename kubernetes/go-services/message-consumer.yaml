@@ -30,3 +30,19 @@ spec:
           value: "message-consumer"
         - name: KAFKA_SASL_PASSWORD
           value: "message-consumer-local-pw"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://host.docker.internal:4317"
+        ports:
+        - containerPort: 8091
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8091
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8091
+          initialDelaySeconds: 5
+          periodSeconds: 10

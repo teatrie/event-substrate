@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -67,7 +66,7 @@ func (h *UploadWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	var event minioEvent
 	if err := json.Unmarshal(body, &event); err != nil {
-		log.Printf("Failed to parse MinIO event: %v", err)
+		log.Error().Err(err).Msg("Failed to parse MinIO event")
 		http.Error(w, "Invalid event format", http.StatusBadRequest)
 		return
 	}
@@ -81,7 +80,7 @@ func (h *UploadWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		// Extract user_id from path: uploads/{user_id}/{uuid}/{file_name}
 		parts := strings.Split(objectKey, "/")
 		if len(parts) < 4 || parts[0] != "uploads" {
-			log.Printf("Skipping non-upload object key: %s", objectKey)
+			log.Info().Str("object_key", objectKey).Msg("Skipping non-upload object key")
 			continue
 		}
 
@@ -121,10 +120,10 @@ func (h *UploadWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			"retry_count":    int32(0),
 		}
 
-		log.Printf("Processing upload webhook: user=%s file=%s size=%d", userID, fileName, record.S3.Object.Size)
+		log.Info().Str("user_id", userID).Str("file_name", fileName).Int64("size", record.S3.Object.Size).Msg("Processing upload webhook")
 
 		if err := h.producer.Produce(r.Context(), uploadReceivedTopic, payload); err != nil {
-			log.Printf("Failed to produce upload.received: %v", err)
+			log.Error().Err(err).Msg("Failed to produce upload.received")
 			http.Error(w, "Failed to produce event", http.StatusInternalServerError)
 			return
 		}
@@ -133,11 +132,11 @@ func (h *UploadWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		// Use Background context — r.Context() is cancelled when handler returns.
 		go func(bucket, src, dst string) {
 			if err := h.mover.MoveObject(context.Background(), bucket, src, dst); err != nil {
-				log.Printf("Async MoveObject failed (saga will retry): %v", err)
+				log.Warn().Err(err).Msg("Async MoveObject failed (saga will retry)")
 			}
 		}(h.bucket, objectKey, permanentPath)
 
-		log.Printf("Produced UploadReceived for user=%s, file=%s", userID, fileName)
+		log.Info().Str("user_id", userID).Str("file_name", fileName).Msg("Produced UploadReceived")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
