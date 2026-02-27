@@ -18,3 +18,7 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:9000"]
     metrics_path: /minio/v2/metrics/cluster
+
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["host.docker.internal:30080"]

@@ -125,9 +125,12 @@ services:
     container_name: prometheus
     volumes:
       - ./telemetry/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--web.enable-remote-write-receiver'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.path=/prometheus'
     ports:
       - "9090:9090"
 
@@ -136,6 +139,7 @@ services:
     container_name: loki
     volumes:
       - ./telemetry/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     ports:
       - "3100:3100"
@@ -145,6 +149,12 @@ services:
     container_name: jaeger
     environment:
       - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    volumes:
+      - jaeger_data:/badger
     ports:
       - "16686:16686"
 
@@ -220,3 +230,6 @@ networks:
 
 volumes:
   clickhouse_data:
+  prometheus_data:
+  jaeger_data:
+  loki_data:
