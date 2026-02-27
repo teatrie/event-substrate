@@ -273,10 +273,13 @@ uploadForm.addEventListener('submit', async (e) => {
         uploadStatus.textContent = 'Uploading file…'
         await uploadFileToStorage(upload_url, selectedFile)
 
-        // Wait for Flink to confirm the upload was processed and media_files updated
+        // Wait for Flink to confirm the upload was processed and media_files updated.
+        // Match on both paths: upload_completed carries files/... (post-move),
+        // upload_expired carries uploads/... (never moved).
         uploadStatus.textContent = 'Processing…'
+        const permanentPath = file_path.replace(/^uploads\//, 'files/')
         const completedNotification = await notificationWaiter.waitFor(
-            file_path,
+            [permanentPath, file_path],
             ['media.upload_completed', 'media.upload_expired', 'media.upload_failed'],
             30000,
         )
@@ -521,6 +524,9 @@ function subscribeToEvents() {
             (payload) => {
                 addNotification(formatNotification(payload.new))
                 notificationWaiter.handleNotification(payload.new)
+                if (payload.new.event_type === 'credit.balance_changed') {
+                    refreshCredits()
+                }
             }
         )
         .subscribe();
@@ -548,6 +554,12 @@ async function checkSession() {
     const { data: { session } } = await supabase.auth.getSession()
 
     if (session) {
+        // Validate token server-side — catches stale JWTs after DB reset
+        const { error: userError } = await supabase.auth.getUser()
+        if (userError) {
+            await supabase.auth.signOut()
+            return
+        }
         // User is logged in
         authView.classList.remove('active-view')
         homeView.classList.add('active-view')

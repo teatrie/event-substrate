@@ -164,13 +164,15 @@ export function createNotificationWaiter() {
   const pending = new Map()
 
   return {
-    waitFor(requestId, eventTypes, timeoutMs) {
+    waitFor(keys, eventTypes, timeoutMs) {
+      const keyArray = Array.isArray(keys) ? keys : [keys]
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(requestId)
-          reject(new Error(`Notification timeout for request ${requestId}`))
+          keyArray.forEach(k => pending.delete(k))
+          reject(new Error(`Notification timeout for request ${keyArray[0]}`))
         }, timeoutMs)
-        pending.set(requestId, { resolve, reject, eventTypes: new Set(eventTypes), timer })
+        const entry = { resolve, reject, eventTypes: new Set(eventTypes), timer, keys: keyArray }
+        keyArray.forEach(k => pending.set(k, entry))
       })
     },
 
@@ -184,7 +186,7 @@ export function createNotificationWaiter() {
         if (!waiter) continue
         if (!waiter.eventTypes.has(notification.event_type)) continue
         clearTimeout(waiter.timer)
-        pending.delete(key)
+        waiter.keys.forEach(k => pending.delete(k))
         waiter.resolve(notification)
         return
       }
