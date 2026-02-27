@@ -23,8 +23,9 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 *   **Analytical Warehouse:** ClickHouse (Real-Time OLAP)
 *   **Build System:** Task (go-task) with incremental change detection
 *   **Monitoring:** OpenTelemetry + Prometheus + Grafana + Jaeger
-*   **Batch Orchestration:** Apache Airflow 2.10.5 (Helm on K8s, KubernetesExecutor)
-*   **Data Pipeline:** Apache Spark (Planned)
+*   **Batch Orchestration:** Apache Airflow 3.1.7 (Helm 1.19.0 on K8s, KubernetesExecutor)
+*   **Batch Processing:** Apache Spark 4.0.2 (Spark Operator on K8s, Iceberg REST Catalog)
+*   **Data Lineage:** Marquez 0.49.0 + OpenLineage (Spark listener + Airflow provider)
 
 ---
 
@@ -112,10 +113,11 @@ When extending or maintaining this platform, **strict adherence to framework and
 - `docs/data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
 - `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
 - `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`, `move_saga_processor.py`).
+- `pyspark_apps/`: PySpark batch jobs organized by domain (`identity/`, `media/`, `analytics/`). Each job has its own `app.py`, tests, and fixtures. Common session config in `common/session.py`.
 - `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).
-- `kubernetes/`: Kubernetes deployment manifests for Flink, Go services, and Flink Operator.
+- `kubernetes/`: Kubernetes deployment manifests for Flink, Spark, Go services, and operators.
 - `supabase/`: Database migrations and webhook configurations.
-- `telemetry/`: Telemetry configuration files (Prometheus, Grafana, Loki, OpenTelemetry).
+- `telemetry/`: Telemetry configuration files (Prometheus, Grafana, Loki, OpenTelemetry, Marquez).
 
 ## Running the Platform
 
@@ -203,13 +205,43 @@ task shutdown
 |---|---|
 | `task airflow:install` | Install Airflow on K8s via Helm (creates namespace, PV/PVC, deploys chart) |
 | `task airflow:upgrade` | Upgrade Airflow Helm release with current values |
-| `task airflow:ui` | Port-forward Airflow webserver to `http://localhost:8280` (admin/admin) |
+| `task airflow:ui` | Port-forward Airflow API server to `http://localhost:8280` (admin/admin). **Run in a separate terminal** — blocks while active. |
 | `task airflow:status` | Show Airflow pod status |
 | `task airflow:start` | Scale Airflow deployments back to 1 |
 | `task airflow:shutdown` | Scale Airflow deployments to 0 |
 | `task airflow:purge` | Uninstall Airflow — Helm release, PV/PVC, namespace |
 | `task airflow:logs:scheduler` | Tail Airflow scheduler logs |
-| `task airflow:logs:webserver` | Tail Airflow webserver logs |
+| `task airflow:logs:api-server` | Tail Airflow API server logs |
+
+**Spark**
+
+| Command | Description |
+|---|---|
+| `task spark:install` | Install Spark Operator on K8s via Helm (one-time) |
+| `task spark:build` | Build Spark job Docker image (production target, change-detected) |
+| `task spark:test` | Run Spark job unit tests locally (PySpark `local[*]`, fast iteration) |
+| `task spark:test:docker` | Run Spark job unit tests in Docker (exact production base + pytest) |
+| `task spark:submit` | Submit SparkApplication to K8s |
+| `task spark:status` | Show SparkApplication status |
+| `task spark:logs` | Tail Spark driver logs |
+| `task spark:purge` | Uninstall Spark Operator and delete namespace |
+
+**Data Lineage (Marquez)**
+
+| Command | Description |
+|---|---|
+| `task lineage:start` | Start Marquez lineage stack (API + Web UI + PostgreSQL) |
+| `task lineage:ui` | Open Marquez Web UI at `http://localhost:3001` |
+| `task lineage:shutdown` | Stop Marquez lineage stack |
+| `task lineage:purge` | Stop Marquez and delete all lineage data |
+
+**Batch Layer (Composite)**
+
+| Command | Description |
+|---|---|
+| `task batch:up` | Start entire batch layer: Spark Operator + Airflow + Marquez lineage stack |
+| `task batch:down` | Stop batch layer: scale Airflow to 0, stop Marquez |
+| `task batch:purge` | Destroy batch layer: uninstall Airflow + Spark Operator, purge Marquez data |
 
 **Testing**
 
@@ -259,6 +291,8 @@ When you run `task start`, the telemetry stack boots up alongside the infrastruc
 *   **Prometheus UI:** [http://localhost:9090](http://localhost:9090)
 *   **Jaeger UI:** [http://localhost:16686](http://localhost:16686)
 *   **Loki:** Port 3100 (queried via Grafana, not directly)
+*   **Marquez API:** [http://localhost:5050](http://localhost:5050) (OpenLineage event receiver + REST queries)
+*   **Marquez Web UI:** [http://localhost:3001](http://localhost:3001) (visual lineage graph)
 
 ### Grafana Dashboards
 Four provisioned JSON dashboards provide full platform visibility:

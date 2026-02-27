@@ -5,6 +5,7 @@ vars:
   CONSUMER_IMAGE: event-substrate-message-consumer:latest
   MEDIA_SERVICE_IMAGE: event-substrate-media-service:latest
   PYFLINK_IMAGE: pyflink-custom:1.18.0
+  SPARK_IMAGE: pyspark/identity-daily-login-aggregates:latest
 
 tasks:
   # ---------------------------------------------------------------------------
@@ -265,9 +266,9 @@ tasks:
       - kubectl create namespace airflow --dry-run=client -o yaml | kubectl apply -f -
       - kubectl apply -f airflow/pv-local.yaml
       - >-
-        helm install airflow apache-airflow/airflow
+        helm upgrade --install airflow apache-airflow/airflow
         --namespace airflow
-        --version 1.16.0
+        --version 1.19.0
         -f airflow/values-local.yaml
         --timeout 10m
       - echo "✅ Airflow installed. Run 'task airflow:ui' to access the web UI."
@@ -278,16 +279,18 @@ tasks:
       - >-
         helm upgrade airflow apache-airflow/airflow
         --namespace airflow
-        --version 1.16.0
+        --version 1.19.0
         -f airflow/values-local.yaml
         --timeout 10m
       - echo "✅ Airflow upgraded."
 
   airflow:ui:
-    desc: Port-forward Airflow webserver to localhost:8280
+    desc: "Port-forward Airflow API server to localhost:8280 (run in separate terminal — blocks while active)"
     cmds:
       - echo "🌐 Airflow UI at http://localhost:8280 (admin/admin)"
-      - kubectl port-forward svc/airflow-webserver 8280:8080 -n airflow
+      - echo "   This is a blocking port-forward — keep this terminal open."
+      - echo "   Press Ctrl+C to stop."
+      - kubectl port-forward svc/airflow-api-server 8280:8080 -n airflow
 
   airflow:status:
     desc: Show Airflow pod status
@@ -299,22 +302,22 @@ tasks:
     cmds:
       - kubectl logs -f deployment/airflow-scheduler -n airflow
 
-  airflow:logs:webserver:
-    desc: Tail Airflow webserver logs
+  airflow:logs:api-server:
+    desc: Tail Airflow API server logs
     cmds:
-      - kubectl logs -f deployment/airflow-webserver -n airflow
+      - kubectl logs -f deployment/airflow-api-server -n airflow
 
   airflow:start:
     desc: Scale Airflow deployments back to 1
     cmds:
-      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=1 2>/dev/null || true
+      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=1 2>/dev/null || true
       - kubectl scale statefulset airflow-triggerer -n airflow --replicas=1 2>/dev/null || true
       - echo "✅ Airflow scaled up."
 
   airflow:shutdown:
     desc: Scale Airflow deployments to 0
     cmds:
-      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=0 2>/dev/null || true
+      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=0 2>/dev/null || true
       - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
       - echo "✅ Airflow scaled down."
 
@@ -322,9 +325,127 @@ tasks:
     desc: Uninstall Airflow — Helm release, PV/PVC, namespace
     cmds:
       - helm uninstall airflow -n airflow 2>/dev/null || true
+      - kubectl delete pods -n airflow --all --force --grace-period=0 2>/dev/null || true
       - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
       - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
       - echo "✅ Airflow purged."
+
+  # ---------------------------------------------------------------------------
+  # Batch Layer (Airflow + Spark + Lineage — one-stop setup)
+  # ---------------------------------------------------------------------------
+  batch:up:
+    desc: Install and start the full batch layer (Airflow, Spark Operator, Marquez)
+    cmds:
+      - task: spark:install
+      - task: airflow:install
+      - task: lineage:start
+      - bash scripts/setup-marquez.sh
+      - echo ""
+      - echo "✅ Batch layer ready."
+      - echo "  Airflow UI{{":"}}  task airflow:ui → http://localhost:8280 (admin/admin)"
+      - echo "  Marquez UI{{":"}}  http://localhost:3001"
+      - echo "  Spark{{":"}}       task spark:build → task spark:submit"
+
+  batch:down:
+    desc: Stop the batch layer (scale Airflow to 0, stop Marquez, delete SparkApplications)
+    cmds:
+      - task: airflow:shutdown
+      - task: lineage:shutdown
+      - kubectl delete sparkapplications --all -A --ignore-not-found 2>/dev/null || true
+      - echo "✅ Batch layer stopped."
+
+  batch:purge:
+    desc: Destroy all batch layer state (Airflow, Spark Operator, Marquez)
+    cmds:
+      - task: airflow:purge
+      - task: spark:purge
+      - task: lineage:purge
+      - echo "✅ Batch layer purged."
+
+  # ---------------------------------------------------------------------------
+  # Spark
+  # ---------------------------------------------------------------------------
+  spark:install:
+    desc: Install Spark Operator on K8s via Helm
+    cmds:
+      - helm repo add spark-operator https://kubeflow.github.io/spark-operator || true
+      - helm repo update spark-operator
+      - >-
+        helm install spark-operator spark-operator/spark-operator
+        --namespace spark-operator --create-namespace
+        --set webhook.enable=false
+        --version 2.1.0
+        || echo "Spark Operator already installed."
+
+  spark:build:
+    desc: Build Spark job Docker image (production target)
+    sources:
+      - Dockerfile.spark
+      - pyspark_apps/**/*.py
+      - pyspark_apps/pyproject.toml
+    cmds:
+      - docker build --target production -t {{.SPARK_IMAGE}} -f Dockerfile.spark .
+
+  spark:test:
+    desc: Run Spark job unit tests (local PySpark)
+    dir: pyspark_apps
+    cmds:
+      - pip install -e '.[test]' -q
+      - pytest -v
+
+  spark:test:docker:
+    desc: Run Spark job unit tests in Docker (exact production base + pytest)
+    cmds:
+      - docker build --target test -t spark-test:latest -f Dockerfile.spark .
+      - docker run --rm spark-test:latest
+
+  spark:submit:
+    desc: Submit SparkApplication to K8s
+    cmds:
+      - kubectl apply -f kubernetes/spark-apps/
+
+  spark:status:
+    desc: Show SparkApplication status
+    cmds:
+      - kubectl get sparkapplications -A 2>/dev/null || echo "No SparkApplications found"
+
+  spark:logs:
+    desc: Tail Spark driver logs
+    cmds:
+      - kubectl logs -f -l spark-role=driver
+
+  spark:purge:
+    desc: Uninstall Spark Operator and delete namespace
+    cmds:
+      - kubectl delete sparkapplications --all -A 2>/dev/null || true
+      - helm uninstall spark-operator -n spark-operator 2>/dev/null || true
+      - kubectl delete namespace spark-operator --ignore-not-found 2>/dev/null || true
+      - echo "✅ Spark Operator purged."
+
+  # ---------------------------------------------------------------------------
+  # Lineage (Marquez + OpenLineage)
+  # ---------------------------------------------------------------------------
+  lineage:start:
+    desc: Start Marquez lineage stack (API + Web UI + PostgreSQL)
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml up -d
+      - echo "✅ Marquez started. API at http://localhost:5050, Web UI at http://localhost:3001"
+
+  lineage:ui:
+    desc: Open Marquez Web UI
+    cmds:
+      - 'open http://localhost:3001'
+
+  lineage:shutdown:
+    desc: Stop Marquez lineage stack
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down 2>/dev/null || true
+
+  lineage:purge:
+    desc: Stop Marquez and delete all lineage data
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down -v 2>/dev/null || true
+      - echo "✅ Marquez purged."
 
   # ---------------------------------------------------------------------------
   # Composite Workflows
@@ -366,9 +487,11 @@ tasks:
       - task: k8s:flink
       - task: k8s:go-services
       - task: clickhouse:init
+      - task: lineage:start
       - echo "✅ Platform is up and running!"
       - echo "Supabase Studio{{":"}} http://127.0.0.1:54323"
       - echo "MinIO Console{{":"}}   http://127.0.0.1:9001 (admin/password)"
+      - echo "Marquez UI{{":"}}      http://127.0.0.1:3001"
 
   shutdown:
     desc: Stop everything
@@ -380,9 +503,11 @@ tasks:
       - kubectl delete -f kubernetes/credit-check-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/ttl-expiry-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/move-saga-deployment.yaml --ignore-not-found
+      - kubectl delete sparkapplications --all -A --ignore-not-found 2>/dev/null || true
       - docker compose down
+      - task: lineage:shutdown
       - supabase stop
-      - kubectl scale deployment airflow-scheduler airflow-webserver -n airflow --replicas=0 2>/dev/null || true
+      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=0 2>/dev/null || true
       - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
       - echo "✅ Shutdown complete."
 
@@ -396,6 +521,8 @@ tasks:
       - helm uninstall airflow -n airflow 2>/dev/null || true
       - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
       - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
+      - task: lineage:purge
+      - task: spark:purge
       - task: clean
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
@@ -535,6 +662,12 @@ tasks:
       - echo ""
       - echo "--- Airflow ---"
       - kubectl get pods -n airflow 2>/dev/null || echo "Airflow not installed"
+      - echo ""
+      - echo "--- Spark Applications ---"
+      - kubectl get sparkapplications -A 2>/dev/null || echo "No SparkApplications found"
+      - echo ""
+      - echo "--- Marquez (Lineage) ---"
+      - 'curl -sf http://localhost:5050/api/v1/namespaces > /dev/null 2>&1 && echo "Marquez API: healthy (http://localhost:5050)" || echo "Marquez: not running"'
 
   frontend:
     desc: Install dependencies and start the Vite frontend dev server

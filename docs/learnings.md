@@ -326,6 +326,38 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 ---
 
+## ⚙️ Batch Processing & Orchestration (Spark + Airflow)
+
+### 1. macOS AirPlay Receiver Blocks Port 5000
+**Observation:** macOS Monterey+ runs AirPlay Receiver on port 5000. Any service bound to `localhost:5000` via Docker port mapping is intercepted by Apple's AirTunes — `curl` returns a 403 with `Server: AirTunes/870.14.1` instead of reaching the container.
+**Decision:** Moved Marquez API from port 5000 to 5050 (admin from 5001 to 5051). When choosing ports for new services, avoid 5000 and 7000 (macOS AirPlay and Screen Sharing defaults). Always test with `curl -v` to check the `Server` header when a service appears unresponsive.
+
+### 2. Airflow 3.x Helm Chart: `apiServer` Replaces `webserver`
+**Observation:** The Airflow Helm chart 1.19.0 (Airflow 3.x) renames the web-facing component from `webserver` to `apiServer`. Putting resource limits, startup probes, and other config under the `webserver:` key in `values.yaml` is silently ignored — the api-server pod runs with no resource limits, leading to OOMKills under memory pressure.
+**Decision:** Resource limits, probes, and service config go under `apiServer:` in Helm values. The `webserver.defaultUser` key is still read by the `createUserJob` template for backward compatibility, so keep it for user creation. The service name also changed: `svc/airflow-webserver` → `svc/airflow-api-server`. The `workers` config moved from `[webserver]` to `[api]` section.
+
+### 3. Airflow 3.x Provider Module Renames
+**Observation:** The CNCF Kubernetes provider v10.x (bundled with Airflow 3.x) renamed `airflow.providers.cncf.kubernetes.operators.kubernetes_pod` to `airflow.providers.cncf.kubernetes.operators.pod`. The old import path causes a DAG parse error (0 DAGs, 1 error) that only appears in the dag-processor stats table — no traceback in the main log.
+**Decision:** When upgrading Airflow major versions, check all DAG imports against the installed provider versions. Use `kubectl exec` to test imports directly inside the dag-processor pod. DAG parse errors in 3.x appear in the stats table (`# Errors` column), not as tracebacks in stdout.
+
+### 4. KubernetesPodOperator Cross-Namespace RBAC
+**Observation:** Airflow's `KubernetesPodOperator` runs task pods in a target namespace (e.g., `spark-apps`), but the Airflow worker pod runs in the `airflow` namespace. The worker's service account (`airflow-worker`) needs explicit RBAC (Role + RoleBinding) in the target namespace to create, list, and delete pods. Without it, the task fails with `403 Forbidden: pods is forbidden`.
+**Decision:** Create a Role with `pods`, `pods/log`, `pods/status` and `events` permissions in the target namespace, bound to the `airflow-worker` ServiceAccount in the `airflow` namespace. This is a one-time setup per target namespace.
+
+### 5. Marquez Requires Mounted Config File
+**Observation:** Setting `MARQUEZ_CONFIG=/etc/marquez/config.yml` in docker-compose without mounting a file at that path causes Marquez to crash with `FileNotFoundException`. The built-in default config at `marquez.dev.yml` hardcodes `postgres` as the DB hostname, which doesn't match a custom service name like `marquez-db`.
+**Decision:** Mount a custom `config.yml` into the container with env-var-templated DB connection settings (`${POSTGRES_HOST:-marquez-db}`). This keeps the docker-compose service naming flexible while satisfying the config requirement.
+
+### 6. KubernetesPodOperator Log Retrieval After Pod Deletion
+**Observation:** With `is_delete_operator_pod=True`, the task pod is cleaned up after execution. Airflow then tries to fetch logs from the deleted pod's hostname, resulting in `NameResolutionError`. The actual task logs were streamed during execution (`get_logs=True`) but aren't persisted after pod deletion.
+**Decision:** This is expected behavior for local dev. In production, configure remote logging (S3/GCS) in Airflow so task logs survive pod deletion. The `get_logs=True` setting streams logs to Airflow's task log during execution — they're visible in the UI while the task runs, just not after the pod is gone.
+
+### 7. Spark Docker Image PYTHONPATH for PySpark + py4j
+**Observation:** The `apache/spark:4.0.2-python3` image bundles PySpark at `/opt/spark/python` and py4j as a zip at `/opt/spark/python/lib/py4j-0.10.9.9-src.zip`. The default Spark entrypoint (`/opt/entrypoint.sh`) sets PYTHONPATH, but clearing the entrypoint (needed for running pytest directly) loses this setup. Without both paths, imports fail with `No module named pyspark` or `No module named py4j`.
+**Decision:** In the Dockerfile test stage, set `ENV PYTHONPATH="/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip"` explicitly and use `ENTRYPOINT []` + `CMD ["python3", "-m", "pytest", ...]`. Don't append `${PYTHONPATH}` — it's undefined in the base image and Docker emits a warning.
+
+---
+
 ## 📦 Project Philosophy
 
 ### 1. The "Base Stack" Strategy
