@@ -274,6 +274,12 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 **Decision:** Every DLQ/retry schema must carry the full payload from the original event. Schema completeness should be verified against the *producing* code, not just the consuming code. When adding a new field to an event producer, grep for all schemas that serialize from the same event map and add the field there too.
 
+### 28. Flink CPU Over-Provisioning on Apple Silicon (8-core Mac)
+
+**Observation:** All 5 Flink deployments (credit_check_processor, ttl_expiry_processor, move_saga_processor, media_notification_processor, identity processors) were using resource requests of 1000m CPU for JobManagers and 500m for TaskManagers, totaling 8,400m CPU requests across the cluster. On an 8-core Mac with 8,000m total allocatable CPU, this left 98% of the cluster capacity as requested (but not always actually scheduled). The move_saga_processor TaskManager pod failed to schedule because the node had no remaining capacity. Individual pod restarts would trigger cascading rescheduling failures during peak load.
+
+**Decision:** Reduced JobManager CPU requests from 1000m to 250m (they are lightweight coordinators that don't process data). TaskManagers remain at 500m (they do the actual work). The total cluster CPU request dropped from 8,400m to 4,550m, leaving ~43% headroom on an 8-core Mac. This allows all 5 deployments to coexist without scheduling conflicts, while still providing sufficient capacity for per-pod memory (256Mi heap per TaskManager). On larger clusters (production), revert to higher JobManager CPU requests if Flink job compilation or checkpoint coordination becomes a bottleneck.
+
 ---
 
 ## 🖥️ Frontend Integration
@@ -289,6 +295,34 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** `credit.balance_changed` arrived via Realtime and appeared in Live Events, but the credit badge in the header didn't update because the handler only called `addNotification()`, not `refreshCredits()`.
 
 **Decision:** When a Realtime notification implies a state change in a different UI component (credits, media browser), the handler must trigger a refresh of that component. Don't assume the user will reload. Map each notification `event_type` to its side effects: `credit.balance_changed` → `refreshCredits()`, `upload_completed` / `file_deleted` → `refreshMediaBrowser()`.
+
+---
+
+## 🔍 Observability & Instrumentation
+
+### 1. zerolog `var log` Shadows stdlib `log` Package — Intentional
+**Observation:** Each Go service declares `var log = zerolog.New(...).With().Timestamp().Logger()` at the package level, shadowing the stdlib `log` package.
+**Decision:** This is intentional and allows gradual migration. Existing code using `log.Printf()` still works (referring to stdlib), while new code uses the structured logger. Eventually all calls migrate to `log.Info()` / `log.Error()`, and the shadowing becomes complete. No need to refactor the entire codebase at once.
+
+### 2. `OTEL_EXPORTER_OTLP_ENDPOINT` Is Auto-Read By OTel SDK
+**Observation:** The OTel SDK checks for `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable automatically during initialization.
+**Decision:** No custom parsing needed in `initOTel()`. The SDK reads the env var and configures the OTLP gRPC exporter endpoint. Default: `http://host.docker.internal:4317`.
+
+### 3. message-consumer HTTP Listener on Port 8091 for K8s Probes
+**Observation:** The message-consumer had no HTTP server before observability — it was a pure Kafka consumer. Adding K8s health probes required exposing `/healthz` and `/readyz`.
+**Decision:** Added a second HTTP listener on port 8091 alongside the Kafka consumer, specifically for health checks. This keeps the Kafka consumer logic isolated and allows K8s to monitor readiness independently. The health check validates Kafka connectivity, so the pod is automatically restarted if the broker becomes unreachable.
+
+### 4. Redpanda `/public_metrics` Requires Admin API Port (9644), Not Kafka Port
+**Observation:** When adding Prometheus scrape targets, attempts to scrape Redpanda metrics on port 9092 (Kafka port) failed.
+**Decision:** Redpanda exposes Prometheus metrics at port 9644 (admin API port), path `/public_metrics`. This is separate from the Kafka broker port. Prometheus scrape config must target `host.docker.internal:9644/public_metrics`.
+
+### 5. MinIO Metrics Require `MINIO_PROMETHEUS_AUTH_TYPE=public` Environment Variable
+**Observation:** MinIO metrics endpoint (`/minio/v2/metrics/cluster`) returns 401 Unauthorized by default.
+**Decision:** Set `MINIO_PROMETHEUS_AUTH_TYPE=public` in the MinIO container environment to enable unauthenticated metrics access. In production, replace with proper auth (bearer token, TLS client cert) before exposing metrics to untrusted networks.
+
+### 6. Health Checks Must Validate Downstream Dependencies
+**Observation:** A service returning 200 OK from `/readyz` when Kafka is down causes the pod to remain in the load balancer and fail requests, degrading user experience.
+**Decision:** The readiness probe validates actual dependency connectivity: check Kafka broker (via test produce/consume), check Postgres connection pool (SELECT 1). Return 503 if any check fails. K8s removes the pod from the load balancer immediately, preventing cascading failures.
 
 ---
 

@@ -389,6 +389,13 @@ tasks:
     cmds:
       - node test_media_upload.mjs
 
+  test:e2e:telemetry:
+    desc: Test telemetry pipeline — health endpoints, Prometheus targets, Grafana dashboards
+    deps: [test:e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_telemetry_health.mjs
+
   test:browser:install:
     desc: Install Playwright browser test dependencies
     dir: tests/browser
@@ -461,6 +468,11 @@ tasks:
     cmds:
       - kubectl logs -f -l app=api-gateway -n go-microservices
 
+  logs:media-service:
+    desc: Tail Media Service logs
+    cmds:
+      - kubectl logs -f -l app=media-service -n go-microservices
+
   logs:consumer:
     desc: Tail Message Consumer logs
     cmds:
@@ -470,6 +482,30 @@ tasks:
     desc: Tail Flink job logs
     cmds:
       - kubectl logs -f -l app=login-events-processor --all-containers
+
+  # ---------------------------------------------------------------------------
+  # Health Checks
+  # ---------------------------------------------------------------------------
+  health:gateway:
+    desc: Check API Gateway health
+    cmds:
+      - "echo '--- /healthz ---' && curl -s http://localhost:8080/healthz | jq ."
+      - "echo '--- /readyz ---' && curl -s http://localhost:8080/readyz | jq ."
+
+  health:media-service:
+    desc: Check Media Service health
+    cmds:
+      - "echo '--- /healthz ---' && curl -s http://localhost:8090/healthz | jq ."
+      - "echo '--- /readyz ---' && curl -s http://localhost:8090/readyz | jq ."
+
+  health:
+    desc: Check health of all Go services
+    cmds:
+      - echo "=== API Gateway ==="
+      - task: health:gateway
+      - echo ""
+      - echo "=== Media Service ==="
+      - task: health:media-service
 
   clean:
     desc: Remove build checksums (forces full rebuild on next run)

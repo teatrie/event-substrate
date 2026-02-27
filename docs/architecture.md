@@ -110,10 +110,37 @@ ClickHouse authenticates as `clickhouse-consumer` and pipes the `internal.platfo
 
 ### Observability Stack
 
-- **Go API Gateway** pushes OTLP metrics and traces to the OpenTelemetry Collector
+- **Go API Gateway, media-service, and message-consumer** push OTLP metrics and traces to the OpenTelemetry Collector
 - **Flink processors** push StatsD metrics to the OTel Collector
+- **Infrastructure metrics** scraped directly: Redpanda admin API (`/public_metrics`), MinIO (`/minio/v2/metrics/cluster`), postgres-exporter
 - The Collector fans out to **Prometheus** (metrics), **Loki** (logs), and **Jaeger** (traces)
-- All three feed into **Grafana** dashboards
+- All three feed into **Grafana** dashboards with 4 provisioned dashboards: Platform Overview, Go Services, Kafka & Redpanda, and Media Saga Pipeline
+
+### Telemetry & Observability Data Flow
+
+**Signal Types and Destinations:**
+
+1. **Metrics (OTLP gRPC + StatsD → Prometheus)**
+   - Go services send structured metrics via OTLP to OTel Collector port 4317
+   - Custom Kafka metrics: `kafka.producer.messages.total`, `kafka.consumer.messages.total`, `kafka.consumer.errors.total` (updated per-message)
+   - HTTP server metrics via `otelhttp` middleware: `http.server.request.duration`, `http.server.active_requests`, `http.server.request.body.size`
+   - Infrastructure metrics scraped from: Redpanda port 9644 (`/public_metrics`), MinIO port 9000 (`/minio/v2/metrics/cluster`), postgres-exporter port 9187
+   - Flink/PyFlink jobs emit operator throughput, backpressure, and checkpoint durations via StatsD to OTel Collector port 8125
+
+2. **Logs (zerolog → stdout → Loki)**
+   - Go services use package-level `var log = zerolog.New(os.Stderr).With().Timestamp().Logger()` for structured JSON logging
+   - All logs output to stderr, captured by Docker/K8s logging driver and indexed in Loki
+   - Context propagation: trace IDs and span IDs automatically included in log lines when available
+
+3. **Traces (OTLP gRPC → Jaeger)**
+   - Go services auto-instrument all HTTP handlers via `otelhttp.NewHandler()` middleware
+   - Outbound Kafka operations tagged with trace context
+   - Database queries inherit trace context from parent HTTP spans
+   - Jaeger stores traces for 72 hours locally (configurable)
+
+**Health Check Endpoints:**
+- All Go services expose `/healthz:8080` (liveness probe) and `/readyz:8080` (readiness probe, checks Kafka/DB)
+- Kubernetes liveness and readiness probes target these endpoints for automatic pod restart/traffic control
 
 ---
 
@@ -150,3 +177,29 @@ Topics are divided into two security zones enforced by prefixed ACLs:
 ### Production Path
 
 The env-var-driven design (`KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`) means swapping to OAUTHBEARER (GCP/AWS) is a configuration change — no code changes needed.
+
+---
+
+## Kubernetes Resource Allocation & Scaling
+
+### Flink Deployment Sizing
+
+Five Flink deployments run in the Kubernetes cluster: `credit_check_processor`, `ttl_expiry_processor`, `move_saga_processor`, `media_notification_processor`, and identity processors. Each deployment consists of a JobManager (coordinator) and one or more TaskManagers (workers).
+
+**Resource Requests Per Deployment:**
+- **JobManager:** 250m CPU / 256Mi RAM (lightweight coordinator, no data processing)
+- **TaskManager:** 500m CPU / 256Mi RAM per pod (worker processes actual stream data)
+
+**Total Cluster Allocation (all 5 deployments):** ~4,550m CPU, allowing ~43% headroom on an 8-core Mac. On production clusters with 16+ cores, consider increasing JobManager CPU to 500m–1000m if checkpoint coordination becomes a bottleneck. The 500m TaskManager CPU is sufficient for the local streaming workload; scale vertically (more CPU per pod) or horizontally (add TaskManager pods) only if observed backpressure or checkpoint latency increases.
+
+### Scaling Message Consumer (KEDA)
+
+The `message-consumer` horizontally scales via KEDA based on Kafka topic lag:
+- **Min replicas:** 1
+- **Max replicas:** 10 (or higher in production)
+- **Target lag threshold:** 5 messages
+- **Metric:** `kafka.consumer.lag` for the `message-consumer` consumer group
+
+When the topic lag exceeds 5 messages, KEDA spawns additional consumer pods up to the max. Each pod independently consumes from the same consumer group, sharing the topic partitions via Kafka's group coordination protocol.
+
+---
