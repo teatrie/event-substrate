@@ -5,7 +5,7 @@
  * These tests catch "dead module" bugs where backend logic exists (media.js)
  * but the UI (index.html) and wiring (main.js) are missing.
  */
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -64,15 +64,16 @@ describe('main.js module wiring', () => {
     })
 
     const requiredImports = [
-        'requestUploadUrl',
         'uploadFileToStorage',
         'fetchUserFiles',
         'formatFileSize',
         'isAllowedMediaType',
         'getMediaCategory',
         'InsufficientCreditsError',
-        'requestDownloadUrl',
-        'deleteFile',
+        'requestUploadIntent',
+        'requestDownloadIntent',
+        'requestDeleteIntent',
+        'createNotificationWaiter',
     ]
 
     for (const fn of requiredImports) {
