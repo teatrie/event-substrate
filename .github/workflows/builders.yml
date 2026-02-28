@@ -1,0 +1,35 @@
+name: Build Builder Images
+on:
+  push:
+    paths: ['docker/builders/**']
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build-builders:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        builder:
+          - go-builder
+          - pyflink-builder
+          - pyspark-builder
+          - frontend-builder
+          - infra-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/builders
+          file: docker/builders/Dockerfile.${{ matrix.builder }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.builder }}:latest
+          platforms: linux/amd64

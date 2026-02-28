@@ -1,0 +1,4 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends default-jre-headless && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir ruff==0.9.10 mypy==1.15.0 'pyspark==4.0.2' 'defopt>=7.0' 'pytest>=8.0'
+WORKDIR /workspace

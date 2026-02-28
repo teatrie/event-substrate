@@ -1,0 +1,4 @@
+FROM golang:1.26-alpine
+RUN apk add --no-cache git
+COPY --from=golangci/golangci-lint:v2.10.1 /usr/bin/golangci-lint /usr/bin/golangci-lint
+WORKDIR /workspace

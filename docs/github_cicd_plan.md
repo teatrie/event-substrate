@@ -246,6 +246,9 @@ To protect the data pipeline, the backend CI enforces strict **Schema Evolution*
 | Spark Docker split (base + per-app) | **Done** | `Dockerfile.spark.base` + per-app thin Dockerfiles |
 | Taskfile Helm integration | **Done** | `helm:install`, `helm:template`, `helm:uninstall` tasks |
 | GHCR image push | **Done** | `ghcr.io/<owner>/event-substrate/<service>:<sha>` |
+| Containerized builder images (`docker/builders/`) | **Done** | 5 builder images, local + CI parity, `.github/workflows/builders.yml` |
+| Containerized Taskfile tasks | **Done** | All lint/check/test tasks run inside builder containers |
+| CI container directives | **Done** | All CI lint/test/check jobs use `container:` with GHCR builder images |
 | Lean CI profile (Docker Compose profiles) | Proposed | Not yet implemented — see Section 3 |
 | Pulumi IaC (`deploy/` directory) | Roadmap | Pending cloud infra setup |
 | Admin dashboard (Stack Visualizer) | Roadmap | Future frontend feature |

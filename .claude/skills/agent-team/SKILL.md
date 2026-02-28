@@ -102,15 +102,49 @@ After ALL waves are complete, run the **full existing test suite** — not just 
 
 ---
 
+## Cost Analysis: Teams vs. Subagents
+
+Before choosing an execution strategy, assess whether the overhead of team orchestration is justified:
+
+### Strategy Selection
+
+| Strategy | When to Use | Cost Profile |
+|----------|------------|-------------|
+| **Opus direct** (no agents) | <5 edits, tightly coupled changes, plan still evolving | Highest per-token, lowest overhead |
+| **Subagents** (Agent tool, no team) | Plan is spec-complete, phases are independent, config/YAML/infra work | 30-45% cheaper than Opus direct |
+| **Agent teams** (TeamCreate) | Multi-domain code requiring TDD, inter-agent coordination, user needs visibility | Highest overhead, best for complex parallel work |
+
+### Decision Heuristic: Plan Completeness
+
+**If the plan specifies exact file content, exact edits, and exact commands** → use plain subagents on cheaper models. Detailed plans turn "design and implement" work into "follow the spec" work, which Sonnet/Haiku handle reliably.
+
+**If work requires design judgment, cross-file reasoning, or iterative discovery** → use agent teams with TDD loops on appropriate model tiers.
+
+### Anti-Patterns
+
+- **Don't use teams for config/YAML/infra work.** Team coordination overhead exceeds parallelism benefit when tasks are mostly sequential edits to shared files (e.g., Taskfile.yml, CI workflows).
+- **Don't use Opus subagents for mechanical edits.** Version bumps, find-replace, doc updates — Haiku handles these in one pass at ~5% of Opus cost.
+- **Don't skip the cost analysis.** Always estimate total tokens × model cost before choosing. A 5-phase infrastructure task can cost $13-19 on Opus vs $7-10 on mixed Haiku/Sonnet — 45% savings.
+
+### Subagent Execution (Non-Team Path)
+
+When the cost analysis favors subagents over teams:
+
+1. **Phase the work** — group changes by independence (can run in parallel) vs dependency (must be sequential).
+2. **Assign models per phase** — Haiku for trivial phases, Sonnet for standard implementation, Opus only for phases requiring judgment.
+3. **Parallelize independent phases** — launch multiple Agent tool calls in a single message.
+4. **Review between phases** — the orchestrator (you) reviews subagent output before launching dependent phases.
+5. **Escalate on failure** — if a Sonnet subagent fails, re-run the phase with Opus (same escalation protocol as teams).
+
 ## Model Selection by Complexity
 
 Before invoking a subagent, perform a **Tier Selection Analysis**:
 
-| Complexity | Model | Examples |
-|------------|-------|----------|
-| Simple | `haiku` | Config changes, file searches, grep/glob, doc formatting, simple test fixes, refactoring |
-| Medium | `sonnet` | Standard code implementation, unit tests, bug fixes with clear scope |
-| Complex | `opus` | Architectural decisions, multi-file refactors, subtle bugs, novel integration work |
+| Complexity | Model | Cost/Phase Est. | Examples |
+|------------|-------|----------------|----------|
+| Simple | `haiku` | $0.20-0.50 | Config changes, file searches, grep/glob, doc formatting, version bumps, simple refactoring |
+| Medium | `sonnet` | $1-3 | Standard code implementation, Dockerfiles, YAML rewrites, unit tests, bug fixes with clear scope |
+| Complex | `opus` | $3-6 | Architectural decisions, multi-file refactors, subtle bugs, novel integration work |
 
 When in doubt, start one tier lower — it's cheaper to escalate than to overspend.
 

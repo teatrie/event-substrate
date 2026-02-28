@@ -26,6 +26,18 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** Airflow 3.x's scheduler consumes significantly more memory than 2.x. With a 512Mi memory limit, the scheduler is OOMKilled during startup — especially on a loaded system running Flink, Redpanda, Spark, and OTel concurrently. The default Helm startup probe (20s timeout) also times out before the scheduler can initialize, compounding the issue into a crash loop.
 **Decision:** Bumped scheduler memory limit from 512Mi to 1Gi and CPU limit from 300m to 500m in `airflow/values-local.yaml`. Added an explicit startup probe with 30s timeout and 30 retries (300s total window). The triggerer can be slow to start under load but doesn't affect DAG execution — only deferrable operators need it.
 
+### 5. Containerized Builder Images for Local ↔ CI Parity
+
+**Observation:** Native host builds pollute the developer's environment with multiple Go, Python, and Node.js versions plus 11+ CLI tools. CI reinstalls everything from scratch on every run (slow, fragile, version drift risk). Different linting results between local and CI cause confusion.
+**Decision:** Created 5 Docker builder images (`docker/builders/`) containing pinned tool versions: go-builder (Go 1.26 + golangci-lint v2.10.1), pyflink-builder (Python 3.10 + ruff + mypy), pyspark-builder (Python 3.12 + ruff + mypy + pyspark + pytest), frontend-builder (Node.js 22), infra-lint (yamllint, sqlfluff, kubeconform, markdownlint-cli2, maid, helm). All `task lint:*`, `check:*`, `test:go`, and `spark:test` run inside containers via `docker run`. Named volumes (`event-substrate-gomod`, `event-substrate-frontend-nm`) cache Go modules and `node_modules` between runs. CI uses the same images via `container:` directives.
+**Gotchas:**
+
+- **arm64/amd64:** The infra-lint image uses `ARG TARGETARCH` for kubeconform and Helm binary downloads. Docker automatically sets this based on build platform. CI builds `linux/amd64` only.
+- **Named volumes:** `docker volume rm event-substrate-gomod` if Go module cache becomes corrupted. Same for `event-substrate-frontend-nm`.
+- **Bootstrap:** Builder images must exist in GHCR before CI jobs can use them. Run the `builders.yml` workflow manually (`workflow_dispatch`) on first setup, or after any Dockerfile change to `docker/builders/`.
+- **Source mounting:** Lint tasks mount `:ro` (read-only) to prevent tools from modifying source. `lint:fix` mounts writable.
+- **Task `sources:` change detection:** Builder images only rebuild when their Dockerfile changes — `task build:go-builder` is a no-op if `Dockerfile.go-builder` hasn't changed.
+
 ---
 
 ## 🏗️ Architecture & Data Flow
