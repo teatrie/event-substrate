@@ -243,18 +243,76 @@ test.describe('Home view (authenticated)', () => {
         await expect(page.locator('#notifications-list')).toBeVisible()
     })
 
-    test('media file cards render download and delete buttons', async ({ page }) => {
-        // Check that the media browser rendering code includes the button classes.
-        // We evaluate the JS source to verify the wiring exists, since creating
-        // a real file requires the full upload pipeline.
-        const mainJs = await page.evaluate(async () => {
-            const resp = await fetch('/main.js')
-            return resp.text()
+    test('media.js exports required intent API functions', async ({ page }) => {
+        const exports = await page.evaluate(async () => {
+            const mod = await import('/media.js')
+            return Object.keys(mod)
         })
-        expect(mainJs).toContain('btn-download')
-        expect(mainJs).toContain('btn-delete')
-        expect(mainJs).toContain('requestDownloadIntent')
-        expect(mainJs).toContain('requestDeleteIntent')
+        expect(exports).toContain('requestUploadIntent')
+        expect(exports).toContain('requestDownloadIntent')
+        expect(exports).toContain('requestDeleteIntent')
+        expect(exports).toContain('createNotificationWaiter')
+    })
+
+    test('download and delete buttons call correct API endpoints', async ({ page }) => {
+        const mockFilePath = 'files/test-user/mock-file.png'
+        const mockFileName = 'mock-file.png'
+
+        // Mock Supabase PostgREST to return a fake media file
+        await page.route('**/rest/v1/media_files**', route => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify([{
+                    id: 1,
+                    file_name: mockFileName,
+                    file_path: mockFilePath,
+                    file_size: 1024,
+                    media_type: 'image/png',
+                    upload_time: new Date().toISOString(),
+                }]),
+            })
+        })
+
+        // Mock API gateway intent endpoints
+        await page.route('**/api/v1/media/download-intent', route => {
+            route.fulfill({
+                status: 202,
+                contentType: 'application/json',
+                body: JSON.stringify({ request_id: 'mock-dl-req' }),
+            })
+        })
+
+        await page.route('**/api/v1/media/delete-intent', route => {
+            route.fulfill({
+                status: 202,
+                contentType: 'application/json',
+                body: JSON.stringify({ request_id: 'mock-del-req' }),
+            })
+        })
+
+        // Reload to trigger media browser refresh with mocked data
+        await page.reload()
+        await expect(page.locator('#home-view')).toBeVisible({ timeout: 10_000 })
+
+        const fileCard = page.locator('.media-file-card', { hasText: mockFileName })
+        await expect(fileCard).toBeVisible({ timeout: 10_000 })
+
+        // Click download → verify correct endpoint called with file_path
+        const downloadPromise = page.waitForRequest('**/api/v1/media/download-intent')
+        await fileCard.locator('.btn-download').click()
+        const downloadReq = await downloadPromise
+        expect(JSON.parse(downloadReq.postData()).file_path).toBe(mockFilePath)
+
+        // Click delete → confirm modal → verify correct endpoint called
+        await fileCard.locator('.btn-delete').click()
+        await expect(page.locator('#delete-modal')).toBeVisible()
+        await page.fill('#delete-confirm-input', 'delete')
+
+        const deletePromise = page.waitForRequest('**/api/v1/media/delete-intent')
+        await page.click('#delete-confirm-btn')
+        const deleteReq = await deletePromise
+        expect(JSON.parse(deleteReq.postData()).file_path).toBe(mockFilePath)
     })
 
     test('delete confirmation modal exists and is hidden by default', async ({ page }) => {
