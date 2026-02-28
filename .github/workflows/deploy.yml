@@ -44,6 +44,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Placeholder — GitHub Actions requires at least one job.
+  # Remove this once deploy-staging is uncommented.
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploy workflow ready. Uncomment staging/production jobs when Pulumi is configured."
+
   # -------------------------------------------------------------------------
   # Stage 1: Deploy to Staging (automatic)
   # -------------------------------------------------------------------------
