@@ -10,6 +10,14 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Observation:** Running a full production-grade stack (Redpanda, Flink, ClickHouse, OTel, Spark) on a local machine requires significant resource efficiency.
 **Decision:** Standardized on **OrbStack** for Apple Silicon. Its native virtualization layer handle the Redpanda tiered storage (S3/MinIO) and Kubernetes management with significantly lower overhead than traditional local Docker Desktop solutions.
 
+### 2. Helm Adoption: Migrating from kubectl to Helm
+**Observation:** When Go services were originally deployed via `kubectl apply -f kubernetes/go-services/`, the resulting K8s resources lack Helm ownership metadata. Switching to `helm upgrade --install` fails with `invalid ownership metadata; label validation error: missing key "app.kubernetes.io/managed-by"` because Helm refuses to adopt resources it didn't create.
+**Decision:** Added an idempotent resource adoption step in the `helm:install` task that annotates and labels existing resources with `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`, and `app.kubernetes.io/managed-by=Helm` before running `helm upgrade --install`. This is a one-time migration — once Helm owns the resources, subsequent installs work cleanly.
+
+### 3. Spark Docker Split: Base + Per-App Layers
+**Observation:** A monolithic Spark Dockerfile that bundles the runtime, JARs, common code, and all app code forces a full rebuild whenever any single app changes. As the number of Spark jobs grows, this becomes wasteful.
+**Decision:** Split into `Dockerfile.spark.base` (Spark 4.0.2 + JARs + pip deps + `common/`) and per-app thin Dockerfiles (e.g., `pyspark_apps/identity/daily_login_aggregates/Dockerfile`) that `FROM spark-base:latest`. Base image only rebuilds when JARs, common code, or dependencies change. Per-app images rebuild in seconds since they only COPY the app code.
+
 ---
 
 ## 🏗️ Architecture & Data Flow

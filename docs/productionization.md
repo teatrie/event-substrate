@@ -359,15 +359,59 @@ Define retention policies for all telemetry data:
 
 ## 9. CI/CD Pipeline
 
+### Current Implementation
+
+The CI/CD pipeline is implemented via GitHub Actions with GHCR (GitHub Container Registry) as the image registry.
+
+| Component | Implementation |
+|---|---|
+| **Container Registry** | GHCR (`ghcr.io/<owner>/event-substrate/<service>:<sha>`) |
+| **CI Workflow** | `.github/workflows/ci.yml` — path-filtered builds, tests, and image push |
+| **Deploy Workflow** | `.github/workflows/deploy.yml` — skeleton for staging/production (Pulumi TBD) |
+| **K8s Packaging** | Helm chart (`charts/event-substrate/`) for Go services + Spark apps |
+
+### CI Workflow (`.github/workflows/ci.yml`)
+
+Path-based change detection via `dorny/paths-filter` ensures only affected services are built and tested:
+
+| Filter | Paths | Jobs Triggered |
+|---|---|---|
+| `api-gateway` | `go-services/api-gateway/**` | test-go, build-push-api-gateway |
+| `message-consumer` | `go-services/message-consumer/**` | test-go, build-push-message-consumer |
+| `media-service` | `go-services/media-service/**` | test-go, build-push-media-service |
+| `spark-base` | `Dockerfile.spark.base`, `pyspark_apps/common/**`, `pyspark_apps/pyproject.toml` | test-spark, build-push-spark |
+| `spark-identity` | `pyspark_apps/identity/**` | test-spark, build-push-spark |
+| `pyflink` | `Dockerfile.pyflink`, `pyflink_jobs/**` | build-push-pyflink |
+| `helm` | `charts/**` | lint-helm |
+
+Image tags use the full git SHA (`ghcr.io/<owner>/event-substrate/<service>:<sha>`). Build+push jobs only run on pushes to `main` (not on PRs). Concurrency groups (`ci-${{ github.ref }}`) with `cancel-in-progress` prevent duplicate builds.
+
+### Deploy Strategy (Model 4 — Hybrid)
+
+The deploy workflow uses a batching strategy:
+- CI builds run per-merge (parallel, path-filtered)
+- Deploys batch via `concurrency` group — latest commit on `main` wins
+- One manual approval gate covers all changes since last production deploy
+- Images are tagged with git SHA and never rebuilt — promotion is "point to SHA"
+
+Deploy jobs are currently commented out pending Pulumi IaC setup. See `docs/github_cicd_plan.md` for the full roadmap.
+
+### Helm Chart (`charts/event-substrate/`)
+
+All Go services and Spark SparkApplication CRDs are managed via a single Helm chart. Local dev uses `imagePullPolicy: Never` (OrbStack shares Docker daemon). Production should use `imagePullPolicy: Always` with SHA-pinned image tags from GHCR.
+
+### Cloud Registry Alternatives
+
+For production, GHCR can be replaced with cloud-native registries:
+
 | | GCP | AWS |
 |---|---|---|
 | **Container Registry** | Artifact Registry | Amazon ECR |
-| **CI/CD** | Cloud Build or GitHub Actions | CodePipeline or GitHub Actions |
 | **K8s Deployment** | Cloud Deploy or ArgoCD | CodeDeploy or ArgoCD |
 
-### Pipeline Stages
+### Pipeline Stages (Future — Full E2E in CI)
 
-1. **Lint & Test** — Go tests, SQL validation, Avro schema compatibility check
+1. **Lint & Test** — Go tests, Spark pytest, Helm lint, Avro schema compatibility check
 2. **Build** — Docker images with SHA tags (not `latest`)
 3. **Schema Registry CI** — `curl` compatibility check against Schema Registry before merge to prevent breaking Avro changes
 4. **Deploy to Staging** — Full integration test against staging Kafka/Postgres
