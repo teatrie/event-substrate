@@ -51,12 +51,40 @@ EOF
 )"
 ```
 
-## Step 4: Wait for CI
+## Step 4: CI Check & Merge
 
-Ask the user what to do next using AskUserQuestion:
-- **"Wait for CI, then merge"** — poll CI status with `gh pr checks <number> --watch`, then merge on success
-- **"Merge now"** — merge immediately without waiting (user has verified manually)
+### Step 4a: Determine if CI will run
+
+Check whether the changed files match any CI path filter that triggers build/test jobs. The CI path filters are defined in `.github/workflows/ci.yml` under `dorny/paths-filter`. The current trigger paths are:
+
+- `go-services/**` — Go tests + Docker builds
+- `pyspark_apps/**`, `Dockerfile.spark.base` — Spark tests + Docker builds
+- `pyflink_jobs/**`, `Dockerfile.pyflink` — PyFlink Docker build
+- `charts/**` — Helm lint
+- `flink_jobs/**` — Flink SQL changes
+
+Files that do NOT trigger any build/test job (CI-silent paths):
+- `docs/**`, `README.md`, `CLAUDE.md`, `*.md` (documentation)
+- `.claude/**` (agent skills, config)
+- `avro/**` (schemas — no CI job yet)
+- `airflow/**` (DAGs — no CI job yet)
+- `supabase/**` (migrations — no CI job yet)
+- `scripts/**`, `telemetry/**`, `kubernetes/**` (infra config)
+- Root config files (`Taskfile.yml`, `docker-compose.yml`, etc.)
+
+Compare the list of changed files against the trigger paths. If **none** of the changed files match a trigger path, CI will only run the `detect-changes` job (~5 seconds) and skip all build/test/push jobs.
+
+### Step 4b: Ask user
+
+**If CI will run** (changed files match trigger paths), ask the user:
+- **"Wait for CI, then merge"** — poll CI status, then merge on success
+- **"Merge now"** — merge immediately without waiting
 - **"Leave open"** — leave the PR open for manual review
+
+**If CI is silent** (no trigger paths matched), tell the user:
+> "No build/test jobs will trigger for these changes (only docs/config files changed). Merging directly."
+
+Then merge immediately: `gh pr merge <number> --merge --delete-branch`
 
 ### If "Wait for CI, then merge":
 ```bash
