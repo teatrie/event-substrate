@@ -27,6 +27,18 @@ tasks:
             esac
           fi
         done
+      - |
+        for tool in golangci-lint ruff sqlfluff yamllint kubeconform; do
+          if ! command -v $tool &> /dev/null; then
+            case $tool in
+              golangci-lint) brew install golangci-lint ;;
+              ruff) brew install ruff ;;
+              sqlfluff) pip install sqlfluff ;;
+              yamllint) pip install yamllint ;;
+              kubeconform) brew install kubeconform ;;
+            esac
+          fi
+        done
 
   # ---------------------------------------------------------------------------
   # Build (change-detected)
@@ -506,6 +518,102 @@ tasks:
     desc: Uninstall kube-state-metrics
     cmds:
       - helm uninstall kube-state-metrics -n kube-system 2>/dev/null || true
+
+  # ---------------------------------------------------------------------------
+  # Linting & Code Quality
+  # ---------------------------------------------------------------------------
+  lint:go:
+    desc: Run golangci-lint on all Go services
+    cmds:
+      - cd go-services/api-gateway && golangci-lint run ./...
+      - cd go-services/message-consumer && golangci-lint run ./...
+      - cd go-services/media-service && golangci-lint run ./...
+
+  lint:python:
+    desc: Run ruff linter on all Python code
+    cmds:
+      - ruff check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+
+  lint:frontend:
+    desc: Run ESLint on frontend code
+    dir: frontend
+    cmds:
+      - npx eslint .
+
+  lint:sql:
+    desc: Run sqlfluff on Supabase migrations (Flink SQL skipped — no dialect support)
+    cmds:
+      - sqlfluff lint supabase/migrations/*.sql
+
+  lint:yaml:
+    desc: Run yamllint on all YAML files
+    cmds:
+      - yamllint -c .yamllint.yml .
+
+  lint:k8s:
+    desc: Validate Kubernetes manifests with kubeconform
+    cmds:
+      - >-
+        kubeconform
+        --schema-location default
+        --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+        --skip FlinkDeployment,SparkApplication,ScaledObject
+        --strict
+        kubernetes/*.yaml
+        kubernetes/go-services/*.yaml
+
+  lint:compose:
+    desc: Validate Docker Compose files
+    cmds:
+      - docker compose config -q
+
+  lint:markdown:
+    desc: Run markdownlint on all project Markdown files
+    cmds:
+      - npx -y markdownlint-cli2 '**/*.md'
+
+  lint:mermaid:
+    desc: Validate Mermaid diagram syntax
+    cmds:
+      - npx -y @probelabs/maid docs/architecture/
+
+  lint:
+    desc: Run all linters
+    cmds:
+      - task: lint:go
+      - task: lint:python
+      - task: lint:frontend
+      - task: lint:sql
+      - task: lint:yaml
+      - task: lint:k8s
+      - task: lint:markdown
+      - task: lint:mermaid
+
+  lint:fix:
+    desc: Auto-fix lint violations where possible
+    cmds:
+      - ruff check --fix pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - ruff format pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - cd frontend && npx eslint --fix .
+      - sqlfluff fix supabase/migrations/*.sql --force
+      - npx -y markdownlint-cli2 --fix '**/*.md'
+
+  check:types:
+    desc: Run type checking on Python code
+    cmds:
+      - mypy --ignore-missing-imports --explicit-package-bases pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+
+  check:security:
+    desc: Run security-focused checks
+    cmds:
+      - ruff check --select S pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - cd frontend && npm audit --audit-level=high || true
+
+  check:
+    desc: Run all linters and type checks
+    cmds:
+      - task: lint
+      - task: check:types
 
   # ---------------------------------------------------------------------------
   # Composite Workflows

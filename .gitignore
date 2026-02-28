@@ -58,3 +58,6 @@ tests/browser/test-results/
 # AI TDD lockfiles
 .tdd-active
 chroma_data/
+
+# MCP server logs (chroma-mcp-server etc.)
+logs/

@@ -1,0 +1,38 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - gosec
+    - govet
+    - staticcheck
+    - unused
+    - goconst
+    - misspell
+
+  exclusions:
+    paths:
+      - ".*_test\\.go"
+    rules:
+      - linters:
+          - goconst
+        path: ".*_test\\.go"
+
+  settings:
+    gosec:
+      excludes:
+        - G114  # net/http server without timeout — acceptable for local K8s pods
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - event-substrate
