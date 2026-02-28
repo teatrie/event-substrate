@@ -11,11 +11,12 @@ overwrite only the target partition for that date.
 
 from datetime import datetime
 
-from airflow import DAG
 from airflow.providers.cncf.kubernetes.operators.pod import (
     KubernetesPodOperator,
 )
 from kubernetes.client.models import V1EnvVar
+
+from airflow import DAG
 
 _NAMESPACE = "spark-apps"
 _IMAGE = "pyspark/identity-daily-login-aggregates:latest"
@@ -37,7 +38,6 @@ with DAG(
     catchup=False,
     tags=["identity", "spark", "daily"],
 ) as dag:
-
     run_aggregates = KubernetesPodOperator(
         task_id="run_daily_login_aggregates",
         name="identity-login-agg-{{ ds_nodash }}",
@@ -46,17 +46,27 @@ with DAG(
         image_pull_policy="IfNotPresent",
         cmds=["/opt/spark/bin/spark-submit"],
         arguments=[
-            "--master", "local[*]",
-            "--conf", "spark.openlineage.transport.url=http://host.docker.internal:5050",
-            "--conf", "spark.openlineage.namespace=spark",
-            "--conf", "spark.openlineage.transport.type=http",
-            "--conf", "spark.extraListeners=io.openlineage.spark.agent.OpenLineageSparkListener",
+            "--master",
+            "local[*]",
+            "--conf",
+            "spark.openlineage.transport.url=http://host.docker.internal:5050",
+            "--conf",
+            "spark.openlineage.namespace=spark",
+            "--conf",
+            "spark.openlineage.transport.type=http",
+            "--conf",
+            "spark.extraListeners=io.openlineage.spark.agent.OpenLineageSparkListener",
             "/opt/spark/work-dir/pyspark_apps/identity/daily_login_aggregates/app.py",
-            "--catalog", "nessie",
-            "--login-table", "nessie.redpanda.public_identity_login_events",
-            "--signup-table", "nessie.redpanda.public_identity_signup_events",
-            "--output-table", "nessie.silver.identity_daily_login_aggregates",
-            "--dt", "{{ ds }}",
+            "--catalog",
+            "nessie",
+            "--login-table",
+            "nessie.redpanda.public_identity_login_events",
+            "--signup-table",
+            "nessie.redpanda.public_identity_signup_events",
+            "--output-table",
+            "nessie.silver.identity_daily_login_aggregates",
+            "--dt",
+            "{{ ds }}",
         ],
         env_vars=_ENV_VARS,
         is_delete_operator_pod=True,

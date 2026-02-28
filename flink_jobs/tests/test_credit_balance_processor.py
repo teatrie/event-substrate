@@ -5,10 +5,10 @@ Covers:
   1. sql_runner.py source registration for media_upload_events
   2. credit_balance_processor.sql structure, sinks, and INSERT logic
 """
+
 import os
 import re
 import sys
-import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,7 +20,7 @@ SQL_FILE_PATH = os.path.join(FLINK_JOBS_DIR, "credit_balance_processor.sql")
 
 def _read_sql():
     """Read the SQL file and return its raw content."""
-    with open(SQL_FILE_PATH, "r") as f:
+    with open(SQL_FILE_PATH) as f:
         return f.read()
 
 
@@ -69,9 +69,7 @@ class TestMediaUploadSourceRegistration:
     def test_media_upload_events_key_exists(self):
         """The sources dict must contain a 'media_upload_events' key."""
         sources = _get_sources_dict()
-        assert "media_upload_events" in sources, (
-            "Expected 'media_upload_events' in sources dict"
-        )
+        assert "media_upload_events" in sources, "Expected 'media_upload_events' in sources dict"
 
     def test_media_upload_events_topic(self):
         """Topic must be 'public.media.upload.events'."""
@@ -138,9 +136,7 @@ class TestCreditBalanceSQLFileExists:
 
     def test_sql_file_exists(self):
         """credit_balance_processor.sql must exist in flink_jobs/."""
-        assert os.path.isfile(SQL_FILE_PATH), (
-            f"Expected SQL file at {SQL_FILE_PATH}"
-        )
+        assert os.path.isfile(SQL_FILE_PATH), f"Expected SQL file at {SQL_FILE_PATH}"
 
 
 class TestCreditBalanceSQLSinks:
@@ -148,12 +144,8 @@ class TestCreditBalanceSQLSinks:
 
     def test_contains_three_create_table_statements(self):
         sql = _strip_comments(_read_sql())
-        create_tables = re.findall(
-            r"CREATE\s+TABLE\s+\w+", sql, re.IGNORECASE
-        )
-        assert len(create_tables) == 3, (
-            f"Expected 3 CREATE TABLE statements, found {len(create_tables)}"
-        )
+        create_tables = re.findall(r"CREATE\s+TABLE\s+\w+", sql, re.IGNORECASE)
+        assert len(create_tables) == 3, f"Expected 3 CREATE TABLE statements, found {len(create_tables)}"
 
     # -- credit_ledger_sink --------------------------------------------------
 
@@ -316,9 +308,7 @@ class TestCreditBalanceSQLInserts:
     def test_contains_five_insert_statements(self):
         sql = _strip_comments(_read_sql())
         inserts = re.findall(r"INSERT\s+INTO", sql, re.IGNORECASE)
-        assert len(inserts) == 5, (
-            f"Expected 5 INSERT INTO statements, found {len(inserts)}"
-        )
+        assert len(inserts) == 5, f"Expected 5 INSERT INTO statements, found {len(inserts)}"
 
     # -- INSERT 1: signup -> credit_ledger_sink (bonus) ----------------------
 
@@ -444,9 +434,7 @@ class TestCreditBalanceSQLInserts:
         assert re.search(r"JSON_OBJECT\s*\(", block, re.IGNORECASE), (
             "Expected JSON_OBJECT in signup notification payload"
         )
-        assert re.search(r"'amount'.*?\b2\b", block, re.DOTALL), (
-            "Expected amount=2 in signup notification JSON"
-        )
+        assert re.search(r"'amount'.*?\b2\b", block, re.DOTALL), "Expected amount=2 in signup notification JSON"
 
     def test_signup_notification_payload_has_reason_signup_bonus(self):
         """The signup notification JSON payload must contain reason='signup_bonus'."""
@@ -493,9 +481,7 @@ class TestCreditBalanceSQLConventions:
         assert "ScramLoginModule" not in sql, (
             "SQL file must not contain JAAS config (semicolon conflict with sql_runner.py)"
         )
-        assert "LoginModule" not in sql, (
-            "SQL file must not contain any LoginModule reference"
-        )
+        assert "LoginModule" not in sql, "SQL file must not contain any LoginModule reference"
 
     def test_all_sinks_use_jdbc_connector(self):
         """All CREATE TABLE sinks must use 'connector' = 'jdbc'."""
@@ -505,9 +491,7 @@ class TestCreditBalanceSQLConventions:
             sql,
             re.DOTALL | re.IGNORECASE,
         )
-        assert len(create_blocks) == 3, (
-            f"Expected 3 CREATE TABLE blocks, found {len(create_blocks)}"
-        )
+        assert len(create_blocks) == 3, f"Expected 3 CREATE TABLE blocks, found {len(create_blocks)}"
         for i, block in enumerate(create_blocks):
             assert "'jdbc'" in block, f"Sink block {i} missing 'connector' = 'jdbc'"
 
@@ -520,9 +504,7 @@ class TestCreditBalanceSQLConventions:
             re.DOTALL | re.IGNORECASE,
         )
         for block in create_blocks:
-            assert "PRIMARY KEY" not in block.upper(), (
-                "Sinks must be append-only (no PRIMARY KEY)"
-            )
+            assert "PRIMARY KEY" not in block.upper(), "Sinks must be append-only (no PRIMARY KEY)"
 
     def test_buffer_flush_max_rows_is_one(self):
         """All sinks should use 'sink.buffer-flush.max-rows' = '1' for low latency."""

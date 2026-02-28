@@ -72,7 +72,7 @@ spec:
             name: pyflink-echo-scripts
         - name: usrlib-volume
           emptyDir: {}
-  
+
   # Specifying the Python application to run
   job:
     jarURI: local:///opt/flink/opt/flink-python_2.12-1.18.0.jar

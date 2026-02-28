@@ -1,10 +1,11 @@
 """TDD tests for identity/daily_login_aggregates build_output_df."""
+
 import json
 from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from pyspark.sql.types import StringType, StructField, StructType
 
 from identity.daily_login_aggregates.app import build_output_df
 
@@ -109,11 +110,7 @@ class TestBuildOutputDf:
 
     def test_full_output_matches_expected(self, spark, login_df, signup_df, expected):
         """Full output sorted by user_id matches expected fixture."""
-        result = (
-            build_output_df(login_df, signup_df, "2024-01-15")
-            .orderBy("user_id")
-            .collect()
-        )
+        result = build_output_df(login_df, signup_df, "2024-01-15").orderBy("user_id").collect()
         assert len(result) == len(expected)
         expected_sorted = sorted(expected, key=lambda r: r["user_id"])
         for actual_row, expected_row in zip(result, expected_sorted):

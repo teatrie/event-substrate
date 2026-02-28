@@ -1,14 +1,16 @@
 import os
+
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.table import StreamTableEnvironment, EnvironmentSettings
+from pyflink.table import EnvironmentSettings, StreamTableEnvironment
 
 # Local dev defaults — overridden by environment variables in production
-REDPANDA_BROKERS = os.environ.get('REDPANDA_BROKERS', 'host.docker.internal:9092')
-SCHEMA_REGISTRY_URL = os.environ.get('SCHEMA_REGISTRY_URL', 'http://host.docker.internal:8081')
-KAFKA_SECURITY_PROTOCOL = os.environ.get('KAFKA_SECURITY_PROTOCOL', 'SASL_PLAINTEXT')
-KAFKA_SASL_MECHANISM = os.environ.get('KAFKA_SASL_MECHANISM', 'SCRAM-SHA-256')
-KAFKA_SASL_USERNAME = os.environ.get('KAFKA_SASL_USERNAME', 'flink-processor')
-KAFKA_SASL_PASSWORD = os.environ.get('KAFKA_SASL_PASSWORD', 'flink-processor-local-pw')
+REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "host.docker.internal:9092")
+SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://host.docker.internal:8081")
+KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT")
+KAFKA_SASL_MECHANISM = os.environ.get("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256")
+KAFKA_SASL_USERNAME = os.environ.get("KAFKA_SASL_USERNAME", "flink-processor")
+KAFKA_SASL_PASSWORD = os.environ.get("KAFKA_SASL_PASSWORD", "flink-processor-local-pw")
+
 
 def run_pyflink_echo_job():
     env = StreamExecutionEnvironment.get_execution_environment()
@@ -16,7 +18,7 @@ def run_pyflink_echo_job():
         "file:///opt/flink/usrlib/flink-sql-connector-kafka-3.0.1-1.18.jar",
         "file:///opt/flink/usrlib/flink-sql-avro-confluent-registry-1.18.0.jar",
         "file:///opt/flink/usrlib/kafka-schema-registry-client-7.6.0.jar",
-        "file:///opt/flink/usrlib/flink-avro-1.18.0.jar"
+        "file:///opt/flink/usrlib/flink-avro-1.18.0.jar",
     )
     settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
     t_env = StreamTableEnvironment.create(env, environment_settings=settings)
@@ -58,5 +60,6 @@ def run_pyflink_echo_job():
         FROM login_events_source
     """)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run_pyflink_echo_job()

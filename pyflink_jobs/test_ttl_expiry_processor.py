@@ -7,13 +7,14 @@ No live Flink cluster required.
 """
 
 import json
+from datetime import datetime
+
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
 
 # ---------------------------------------------------------------------------
 # Helpers: minimal PyFlink API mocks
 # ---------------------------------------------------------------------------
+
 
 class MockValueState:
     """Mimics pyflink.datastream.state.ValueState."""
@@ -80,6 +81,7 @@ class MockRuntimeContext:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def signed_event():
     return {
@@ -131,11 +133,13 @@ def ttl_fn():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestTTLDefault:
     """D8: TTL default value."""
 
     def test_ttl_default_is_900_seconds(self):
         from pyflink_jobs.ttl_expiry_processor import TTLExpiryFunction
+
         assert TTLExpiryFunction.UPLOAD_TTL_SECONDS == 900
 
 
@@ -181,9 +185,7 @@ class TestProcessElement1:
 
         assert ttl_fn._test_completed_state.value() is False
 
-    def test_duplicate_signed_event_overwrites_state_and_re_registers_timer(
-        self, ttl_fn, signed_event
-    ):
+    def test_duplicate_signed_event_overwrites_state_and_re_registers_timer(self, ttl_fn, signed_event):
         """Second upload.signed for same file_path → latest stored, timer re-registered."""
         timer_service = MockTimerService(current_time_ms=1_000)
         ctx = MockContext(timer_service=timer_service)
@@ -233,9 +235,7 @@ class TestOnTimer:
         ttl_fn.process_element1(signed_event, ctx)
         return timer_service
 
-    def test_emits_expired_event_when_upload_not_completed(
-        self, ttl_fn, signed_event
-    ):
+    def test_emits_expired_event_when_upload_not_completed(self, ttl_fn, signed_event):
         self._run_process_element1(ttl_fn, signed_event)
 
         timer_ctx = MockContext(timestamp=900_000)
@@ -250,9 +250,7 @@ class TestOnTimer:
         assert "expired_time" in expired
         assert expired["expired_time"] != ""
 
-    def test_expired_event_request_time_comes_from_signed_time(
-        self, ttl_fn, signed_event
-    ):
+    def test_expired_event_request_time_comes_from_signed_time(self, ttl_fn, signed_event):
         self._run_process_element1(ttl_fn, signed_event)
 
         timer_ctx = MockContext(timestamp=900_000)
@@ -260,9 +258,7 @@ class TestOnTimer:
 
         assert results[0]["request_time"] == signed_event["signed_time"]
 
-    def test_emits_nothing_when_upload_completed(
-        self, ttl_fn, signed_event, completed_event
-    ):
+    def test_emits_nothing_when_upload_completed(self, ttl_fn, signed_event, completed_event):
         self._run_process_element1(ttl_fn, signed_event)
         complete_ctx = MockContext()
         ttl_fn.process_element2(completed_event, complete_ctx)
@@ -272,9 +268,7 @@ class TestOnTimer:
 
         assert len(results) == 0
 
-    def test_clears_state_after_timer_fires_expired(
-        self, ttl_fn, signed_event
-    ):
+    def test_clears_state_after_timer_fires_expired(self, ttl_fn, signed_event):
         self._run_process_element1(ttl_fn, signed_event)
 
         timer_ctx = MockContext(timestamp=900_000)
@@ -283,9 +277,7 @@ class TestOnTimer:
         assert ttl_fn._test_signed_state.value() is None
         assert ttl_fn._test_completed_state.value() is None
 
-    def test_clears_state_after_timer_fires_completed(
-        self, ttl_fn, signed_event, completed_event
-    ):
+    def test_clears_state_after_timer_fires_completed(self, ttl_fn, signed_event, completed_event):
         self._run_process_element1(ttl_fn, signed_event)
         complete_ctx = MockContext()
         ttl_fn.process_element2(completed_event, complete_ctx)

@@ -10,28 +10,26 @@ Flink SQL cannot express conditional INSERT based on aggregate queries.
 """
 
 import os
-import json
-import time
-import psycopg2
 from datetime import datetime, timezone
 
+import psycopg2
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.table import StreamTableEnvironment, EnvironmentSettings
+from pyflink.table import EnvironmentSettings, StreamTableEnvironment
 
 # Local dev defaults — overridden by environment variables in production
-REDPANDA_BROKERS = os.environ.get('REDPANDA_BROKERS', 'host.docker.internal:9092')
-SCHEMA_REGISTRY_URL = os.environ.get('SCHEMA_REGISTRY_URL', 'http://host.docker.internal:8081')
-KAFKA_SECURITY_PROTOCOL = os.environ.get('KAFKA_SECURITY_PROTOCOL', 'SASL_PLAINTEXT')
-KAFKA_SASL_MECHANISM = os.environ.get('KAFKA_SASL_MECHANISM', 'SCRAM-SHA-256')
-KAFKA_SASL_USERNAME = os.environ.get('KAFKA_SASL_USERNAME', 'flink-processor')
-KAFKA_SASL_PASSWORD = os.environ.get('KAFKA_SASL_PASSWORD', 'flink-processor-local-pw')
+REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "host.docker.internal:9092")
+SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://host.docker.internal:8081")
+KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT")
+KAFKA_SASL_MECHANISM = os.environ.get("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256")
+KAFKA_SASL_USERNAME = os.environ.get("KAFKA_SASL_USERNAME", "flink-processor")
+KAFKA_SASL_PASSWORD = os.environ.get("KAFKA_SASL_PASSWORD", "flink-processor-local-pw")
 
 # Postgres connection for credit check
-SUPABASE_DB_HOST = os.environ.get('SUPABASE_DB_HOST', 'host.docker.internal')
-SUPABASE_DB_PORT = os.environ.get('SUPABASE_DB_PORT', '54322')
-SUPABASE_DB_NAME = os.environ.get('SUPABASE_DB_NAME', 'postgres')
-SUPABASE_DB_USER = os.environ.get('SUPABASE_DB_USER', 'postgres')
-SUPABASE_DB_PASSWORD = os.environ.get('SUPABASE_DB_PASSWORD', 'postgres')
+SUPABASE_DB_HOST = os.environ.get("SUPABASE_DB_HOST", "host.docker.internal")
+SUPABASE_DB_PORT = os.environ.get("SUPABASE_DB_PORT", "54322")
+SUPABASE_DB_NAME = os.environ.get("SUPABASE_DB_NAME", "postgres")
+SUPABASE_DB_USER = os.environ.get("SUPABASE_DB_USER", "postgres")
+SUPABASE_DB_PASSWORD = os.environ.get("SUPABASE_DB_PASSWORD", "postgres")
 
 # Atomic check-and-deduct SQL: INSERT -1 only if balance >= 1
 DEDUCT_SQL = """
@@ -128,13 +126,13 @@ def run_credit_check_job():
     """)
 
     # Convert source table to DataStream for custom processing
-    intent_table = t_env.from_path('upload_intent_source')
+    intent_table = t_env.from_path("upload_intent_source")
     intent_stream = t_env.to_data_stream(intent_table)
 
     # Process each intent: check credit, produce approved or rejected
-    from pyflink.datastream.functions import FlatMapFunction
-    from pyflink.common.typeinfo import Types
     from pyflink.common import Row
+    from pyflink.common.typeinfo import Types
+    from pyflink.datastream.functions import FlatMapFunction
 
     class CreditCheckFunction(FlatMapFunction):
         """Checks credit balance and deducts atomically. Emits (outcome, row) tuples."""
@@ -150,10 +148,10 @@ def run_credit_check_job():
                 self.conn.close()
 
         def flat_map(self, value):
-            user_id = value[0]     # user_id
-            file_name = value[1]   # file_name
+            user_id = value[0]  # user_id
+            file_name = value[1]  # file_name
             media_type = value[2]  # media_type
-            file_size = value[3]   # file_size
+            file_size = value[3]  # file_size
             request_id = value[4]  # request_id
             request_time = value[5]  # request_time
 
@@ -172,26 +170,66 @@ def run_credit_check_job():
                 else:
                     # Insufficient credits — rejected
                     rejected_time = datetime.now(timezone.utc).isoformat()
-                    yield Row("rejected", user_id, file_name, media_type, file_size, request_id, "", "insufficient_credits", rejected_time)
+                    yield Row(
+                        "rejected",
+                        user_id,
+                        file_name,
+                        media_type,
+                        file_size,
+                        request_id,
+                        "",
+                        "insufficient_credits",
+                        rejected_time,
+                    )
 
             except Exception as e:
                 print(f"Credit check error for user {user_id}: {e}")
                 try:
                     self.conn.rollback()
-                except Exception:
-                    pass
+                except Exception:  # noqa: S110
+                    pass  # Rollback failure is non-critical; reconnect follows
                 # Reconnect on error
                 try:
                     self.conn = get_db_connection()
                 except Exception as reconnect_err:
                     print(f"Reconnect failed: {reconnect_err}")
                 rejected_time = datetime.now(timezone.utc).isoformat()
-                yield Row("rejected", user_id, file_name, media_type, file_size, request_id, "", "internal_error", rejected_time)
+                yield Row(
+                    "rejected",
+                    user_id,
+                    file_name,
+                    media_type,
+                    file_size,
+                    request_id,
+                    "",
+                    "internal_error",
+                    rejected_time,
+                )
 
     # Define output type: (outcome, user_id, file_name, media_type, file_size, request_id, request_time, reason, rejected_time)
     output_type = Types.ROW_NAMED(
-        ["outcome", "user_id", "file_name", "media_type", "file_size", "request_id", "request_time", "reason", "rejected_time"],
-        [Types.STRING(), Types.STRING(), Types.STRING(), Types.STRING(), Types.LONG(), Types.STRING(), Types.STRING(), Types.STRING(), Types.STRING()]
+        [
+            "outcome",
+            "user_id",
+            "file_name",
+            "media_type",
+            "file_size",
+            "request_id",
+            "request_time",
+            "reason",
+            "rejected_time",
+        ],
+        [
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.LONG(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+        ],
     )
 
     result_stream = intent_stream.flat_map(CreditCheckFunction(), output_type=output_type)
@@ -221,5 +259,5 @@ def run_credit_check_job():
     print("Credit Check Processor started.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run_credit_check_job()
