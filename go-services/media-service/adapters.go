@@ -168,7 +168,7 @@ func (p *avroKafkaProducer) Produce(ctx context.Context, topic string, event map
 	var buf bytes.Buffer
 	buf.WriteByte(0)
 	idBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(idBytes, uint32(cached.id))
+	binary.BigEndian.PutUint32(idBytes, uint32(cached.id)) //nolint:gosec // Schema IDs are always positive and small
 	buf.Write(idBytes)
 	buf.Write(avroBytes)
 
@@ -207,7 +207,7 @@ func (p *instrumentedKafkaProducer) Produce(ctx context.Context, topic string, e
 	err := p.inner.Produce(ctx, topic, event)
 	status := "ok"
 	if err != nil {
-		status = "error"
+		status = statusError
 	}
 	p.counter.Add(ctx, 1,
 		otelmetric.WithAttributes(topicAttr(topic), statusAttr(status)),

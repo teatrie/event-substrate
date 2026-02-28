@@ -15,6 +15,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const errInsufficientCredits = "insufficient_credits"
+
 // ---------------------------------------------------------------------------
 // Mock implementations of CreditChecker and URLSigner
 // ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ func validJWT(userID string) string {
 }
 
 func defaultUploadConfig() *UploadConfig {
-	return &UploadConfig{
+	return &UploadConfig{ //nolint:gosec // test fixture credentials
 		StorageBucketName: "media-uploads",
 		StorageEndpoint:   "http://localhost:9000",
 		StorageAccessKey:  "admin",
@@ -262,7 +264,7 @@ func TestUploadURL_ZeroCredits(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response body as JSON: %v", err)
 	}
-	if resp["error"] != "insufficient_credits" {
+	if resp["error"] != errInsufficientCredits {
 		t.Errorf("expected error 'insufficient_credits', got %q", resp["error"])
 	}
 }
@@ -281,7 +283,7 @@ func TestUploadURL_UserNotFound_NoCreditRow(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response body as JSON: %v", err)
 	}
-	if resp["error"] != "insufficient_credits" {
+	if resp["error"] != errInsufficientCredits {
 		t.Errorf("expected error 'insufficient_credits', got %q", resp["error"])
 	}
 }
@@ -476,7 +478,7 @@ func TestUploadURL_NegativeCredits(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response body as JSON: %v", err)
 	}
-	if resp["error"] != "insufficient_credits" {
+	if resp["error"] != errInsufficientCredits {
 		t.Errorf("expected error 'insufficient_credits', got %q", resp["error"])
 	}
 }

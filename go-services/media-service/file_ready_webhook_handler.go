@@ -75,5 +75,5 @@ func (h *FileReadyWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "No processable file-ready records")
+	_, _ = fmt.Fprint(w, "No processable file-ready records")
 }

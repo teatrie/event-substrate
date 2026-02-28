@@ -12,6 +12,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const (
+	testUploadBody    = `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	testUserID123     = "user-123"
+	testFilePath      = "uploads/user-123/some-uuid/photo.jpg"
+	testFilePathBody  = `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+)
+
 // ---------------------------------------------------------------------------
 // Mock / Spy for intent event production
 // ---------------------------------------------------------------------------
@@ -68,7 +75,7 @@ func doIntentRequest(handler *IntentHandler, method, path, body string, headers 
 
 func TestIntentUpload_HappyPath(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -94,7 +101,7 @@ func TestIntentUpload_HappyPath(t *testing.T) {
 		t.Errorf("expected topic 'internal.media.upload.intent', got %q", call.topic)
 	}
 
-	if call.payload["user_id"] != "user-123" {
+	if call.payload["user_id"] != testUserID123 {
 		t.Errorf("expected user_id 'user-123', got %v", call.payload["user_id"])
 	}
 	if call.payload["request_id"] != requestID {
@@ -180,7 +187,7 @@ func TestIntentUpload_NegativeFileSize(t *testing.T) {
 
 func TestIntentUpload_NoAuth(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, nil)
 
 	if rr.Code != http.StatusUnauthorized {
@@ -190,7 +197,7 @@ func TestIntentUpload_NoAuth(t *testing.T) {
 
 func TestIntentUpload_InvalidJWT(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	headers := map[string]string{"Authorization": "Bearer not-a-valid-jwt"}
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, headers)
 
@@ -208,7 +215,7 @@ func TestIntentUpload_ExpiredJWT(t *testing.T) {
 	signed, _ := token.SignedString(testJWTSecret)
 
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	headers := map[string]string{"Authorization": "Bearer " + signed}
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, headers)
 
@@ -219,7 +226,7 @@ func TestIntentUpload_ExpiredJWT(t *testing.T) {
 
 func TestIntentUpload_MissingBearerPrefix(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	headers := map[string]string{"Authorization": validJWT("user-123")}
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, headers)
 
@@ -239,7 +246,7 @@ func TestIntentUpload_WrongMethod(t *testing.T) {
 
 func TestIntentUpload_PUTMethodNotAllowed(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPut, "/api/v1/media/upload-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -267,7 +274,7 @@ func TestIntentUpload_MalformedJSON(t *testing.T) {
 
 func TestIntentUpload_ResponseContentTypeIsJSON(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -282,7 +289,7 @@ func TestIntentUpload_ResponseContentTypeIsJSON(t *testing.T) {
 
 func TestIntentUpload_EventContainsRequestTime(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -297,7 +304,7 @@ func TestIntentUpload_EventContainsRequestTime(t *testing.T) {
 
 func TestIntentUpload_EventContainsFileSize(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -320,7 +327,7 @@ func TestIntentUpload_EventContainsFileSize(t *testing.T) {
 
 func TestIntentDownload_HappyPath(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/download-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -346,13 +353,13 @@ func TestIntentDownload_HappyPath(t *testing.T) {
 		t.Errorf("expected topic 'internal.media.download.intent', got %q", call.topic)
 	}
 
-	if call.payload["user_id"] != "user-123" {
+	if call.payload["user_id"] != testUserID123 {
 		t.Errorf("expected user_id 'user-123', got %v", call.payload["user_id"])
 	}
 	if call.payload["request_id"] != requestID {
 		t.Errorf("expected request_id in event to match response, got %v", call.payload["request_id"])
 	}
-	if call.payload["file_path"] != "uploads/user-123/some-uuid/photo.jpg" {
+	if call.payload["file_path"] != testFilePath {
 		t.Errorf("expected file_path in event, got %v", call.payload["file_path"])
 	}
 }
@@ -377,7 +384,7 @@ func TestIntentDownload_EmptyFilePath(t *testing.T) {
 
 func TestIntentDownload_NoAuth(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/download-intent", body, nil)
 
 	if rr.Code != http.StatusUnauthorized {
@@ -414,7 +421,7 @@ func TestIntentDownload_MalformedJSON(t *testing.T) {
 
 func TestIntentDownload_EventContainsRequestTime(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/download-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -433,7 +440,7 @@ func TestIntentDownload_EventContainsRequestTime(t *testing.T) {
 
 func TestIntentDelete_HappyPath(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/delete-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -459,13 +466,13 @@ func TestIntentDelete_HappyPath(t *testing.T) {
 		t.Errorf("expected topic 'internal.media.delete.intent', got %q", call.topic)
 	}
 
-	if call.payload["user_id"] != "user-123" {
+	if call.payload["user_id"] != testUserID123 {
 		t.Errorf("expected user_id 'user-123', got %v", call.payload["user_id"])
 	}
 	if call.payload["request_id"] != requestID {
 		t.Errorf("expected request_id in event to match response, got %v", call.payload["request_id"])
 	}
-	if call.payload["file_path"] != "uploads/user-123/some-uuid/photo.jpg" {
+	if call.payload["file_path"] != testFilePath {
 		t.Errorf("expected file_path in event, got %v", call.payload["file_path"])
 	}
 }
@@ -490,7 +497,7 @@ func TestIntentDelete_EmptyFilePath(t *testing.T) {
 
 func TestIntentDelete_NoAuth(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/delete-intent", body, nil)
 
 	if rr.Code != http.StatusUnauthorized {
@@ -527,7 +534,7 @@ func TestIntentDelete_MalformedJSON(t *testing.T) {
 
 func TestIntentDelete_EventContainsRequestTime(t *testing.T) {
 	h, producer := defaultIntentHandler()
-	body := `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	body := testFilePathBody
 	rr := doIntentRequest(h, http.MethodPost, "/api/v1/media/delete-intent", body, authHeaders("user-123"))
 
 	if rr.Code != http.StatusAccepted {
@@ -546,7 +553,7 @@ func TestIntentDelete_EventContainsRequestTime(t *testing.T) {
 
 func TestIntentRequestID_Uniqueness(t *testing.T) {
 	h, _ := defaultIntentHandler()
-	body := `{"file_name":"photo.jpg","media_type":"image/jpeg","file_size":2048000}`
+	body := testUploadBody
 	headers := authHeaders("user-123")
 
 	rr1 := doIntentRequest(h, http.MethodPost, "/api/v1/media/upload-intent", body, headers)
@@ -557,8 +564,8 @@ func TestIntentRequestID_Uniqueness(t *testing.T) {
 	}
 
 	var resp1, resp2 map[string]any
-	json.Unmarshal(rr1.Body.Bytes(), &resp1)
-	json.Unmarshal(rr2.Body.Bytes(), &resp2)
+	_ = json.Unmarshal(rr1.Body.Bytes(), &resp1)
+	_ = json.Unmarshal(rr2.Body.Bytes(), &resp2)
 
 	id1 := resp1["request_id"].(string)
 	id2 := resp2["request_id"].(string)
@@ -578,7 +585,7 @@ func TestIntentUpload_EventPayloadCorrectness(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	requestID := resp["request_id"].(string)
 
 	call := producer.lastCall()
@@ -615,7 +622,7 @@ func TestIntentDownload_EventPayloadCorrectness(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	requestID := resp["request_id"].(string)
 
 	call := producer.lastCall()
@@ -649,7 +656,7 @@ func TestIntentDelete_EventPayloadCorrectness(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	requestID := resp["request_id"].(string)
 
 	call := producer.lastCall()

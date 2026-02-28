@@ -67,7 +67,7 @@ func (h *IntentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]any{"request_id": requestID})
+	_ = json.NewEncoder(w).Encode(map[string]any{"request_id": requestID})
 }
 
 // intentTypeFromPath maps URL path suffixes to intent type strings.

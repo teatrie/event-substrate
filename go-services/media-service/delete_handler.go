@@ -91,14 +91,14 @@ func (h *DeleteHandler) Handle(ctx context.Context, payload map[string]any) erro
 	// event for background cleanup. The user has already been notified.
 	if err := h.remover.RemoveObject(ctx, h.bucket, filePath); err != nil {
 		return h.producer.Produce(ctx, deleteRetryTopic, map[string]any{
-			"user_id":    userID,
-			"file_path":  filePath,
-			"file_name":  metadata.FileName,
-			"media_type": metadata.MediaType,
-			"file_size":  metadata.FileSize,
-			"request_id": requestID,
+			"user_id":     userID,
+			"file_path":   filePath,
+			"file_name":   metadata.FileName,
+			"media_type":  metadata.MediaType,
+			"file_size":   metadata.FileSize,
+			"request_id":  requestID,
 			"retry_count": int32(0),
-			"failed_at":  time.Now().UTC().Format(time.RFC3339),
+			"failed_at":   time.Now().UTC().Format(time.RFC3339),
 		})
 	}
 

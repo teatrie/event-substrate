@@ -7,6 +7,8 @@ import (
 	"net/http"
 )
 
+const statusError = "error"
+
 // ---------------------------------------------------------------------------
 // Interfaces for health check dependencies
 // ---------------------------------------------------------------------------
@@ -63,9 +65,9 @@ func (h *HealthzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ReadyzHandler checks Kafka, DB, and MinIO connectivity.
 type ReadyzHandler struct {
-	db     DBPinger
-	kafka  KafkaChecker
-	minio  MinioChecker
+	db    DBPinger
+	kafka KafkaChecker
+	minio MinioChecker
 }
 
 // NewReadyzHandler constructs a ReadyzHandler with the given dependency checkers.
@@ -85,24 +87,24 @@ func (h *ReadyzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	healthy := true
 
 	if err := h.kafka.Check(ctx); err != nil {
-		checks["kafka"] = "error"
+		checks["kafka"] = statusError
 		healthy = false
 	}
 
 	if err := h.db.PingContext(ctx); err != nil {
-		checks["database"] = "error"
+		checks["database"] = statusError
 		healthy = false
 	}
 
 	if err := h.minio.Check(ctx); err != nil {
-		checks["minio"] = "error"
+		checks["minio"] = statusError
 		healthy = false
 	}
 
 	status := "ok"
 	httpCode := http.StatusOK
 	if !healthy {
-		status = "error"
+		status = statusError
 		httpCode = http.StatusServiceUnavailable
 	}
 

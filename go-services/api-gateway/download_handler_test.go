@@ -111,7 +111,7 @@ func defaultDownloadHandler() (*DownloadHandler, *mockEventProducer) {
 }
 
 func validDownloadBody() string {
-	return `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	return testFilePathBody
 }
 
 func doDownloadRequest(handler *DownloadHandler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
