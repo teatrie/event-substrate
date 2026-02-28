@@ -1,0 +1,5 @@
+apiVersion: v2
+name: event-substrate
+description: Event-driven microservices platform
+version: 0.1.0
+type: application

@@ -1,0 +1,60 @@
+{{- if .Values.goServices.mediaService.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-service
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  replicas: {{ .Values.goServices.mediaService.replicas }}
+  selector:
+    matchLabels:
+      app: media-service
+  template:
+    metadata:
+      labels:
+        app: media-service
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: media-service
+        image: {{ .Values.goServices.mediaService.image.repository }}:{{ .Values.goServices.mediaService.image.tag }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        env:
+        {{- range $key, $val := .Values.goServices.mediaService.env }}
+        - name: {{ $key }}
+          value: {{ $val | quote }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.goServices.mediaService.port }}
+          name: webhook
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.goServices.mediaService.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: {{ .Values.goServices.mediaService.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: media-service
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  selector:
+    app: media-service
+  ports:
+  - port: {{ .Values.goServices.mediaService.port }}
+    targetPort: {{ .Values.goServices.mediaService.port }}
+    name: webhook
+  type: LoadBalancer
+{{- end }}

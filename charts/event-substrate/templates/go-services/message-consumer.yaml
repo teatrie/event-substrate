@@ -1,0 +1,45 @@
+{{- if .Values.goServices.messageConsumer.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: message-consumer
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  replicas: {{ .Values.goServices.messageConsumer.replicas }}
+  selector:
+    matchLabels:
+      app: message-consumer
+  template:
+    metadata:
+      labels:
+        app: message-consumer
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: message-consumer
+        image: {{ .Values.goServices.messageConsumer.image.repository }}:{{ .Values.goServices.messageConsumer.image.tag }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        env:
+        {{- range $key, $val := .Values.goServices.messageConsumer.env }}
+        - name: {{ $key }}
+          value: {{ $val | quote }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.goServices.messageConsumer.port }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.goServices.messageConsumer.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: {{ .Values.goServices.messageConsumer.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+{{- end }}

@@ -1,0 +1,239 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api-gateway: ${{ steps.filter.outputs.api-gateway }}
+      message-consumer: ${{ steps.filter.outputs.message-consumer }}
+      media-service: ${{ steps.filter.outputs.media-service }}
+      any-go: ${{ steps.filter.outputs.any-go }}
+      spark-base: ${{ steps.filter.outputs.spark-base }}
+      spark-identity: ${{ steps.filter.outputs.spark-identity }}
+      any-spark: ${{ steps.filter.outputs.any-spark }}
+      pyflink: ${{ steps.filter.outputs.pyflink }}
+      helm: ${{ steps.filter.outputs.helm }}
+      flink-sql: ${{ steps.filter.outputs.flink-sql }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api-gateway:
+              - 'go-services/api-gateway/**'
+            message-consumer:
+              - 'go-services/message-consumer/**'
+            media-service:
+              - 'go-services/media-service/**'
+            any-go:
+              - 'go-services/**'
+            spark-base:
+              - 'Dockerfile.spark.base'
+              - 'pyspark_apps/common/**'
+              - 'pyspark_apps/pyproject.toml'
+            spark-identity:
+              - 'pyspark_apps/identity/**'
+            any-spark:
+              - 'pyspark_apps/**'
+              - 'Dockerfile.spark.base'
+            pyflink:
+              - 'Dockerfile.pyflink'
+              - 'pyflink_jobs/**'
+            helm:
+              - 'charts/**'
+            flink-sql:
+              - 'flink_jobs/**'
+
+  test-go:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Test api-gateway
+        if: needs.detect-changes.outputs.api-gateway == 'true'
+        run: cd go-services/api-gateway && go test ./...
+      - name: Test message-consumer
+        if: needs.detect-changes.outputs.message-consumer == 'true'
+        run: cd go-services/message-consumer && go test ./...
+      - name: Test media-service
+        if: needs.detect-changes.outputs.media-service == 'true'
+        run: cd go-services/media-service && go test ./...
+
+  test-spark:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-spark == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Install and test
+        working-directory: pyspark_apps
+        run: |
+          pip install -e '.[test]'
+          pytest -v
+
+  lint-helm:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - name: Lint Helm chart
+        run: helm lint charts/event-substrate/
+
+  build-push-api-gateway:
+    needs: [detect-changes, test-go]
+    if: >-
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.api-gateway == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./go-services/api-gateway
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/api-gateway:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/api-gateway:latest
+
+  build-push-message-consumer:
+    needs: [detect-changes, test-go]
+    if: >-
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.message-consumer == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./go-services/message-consumer
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/message-consumer:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/message-consumer:latest
+
+  build-push-media-service:
+    needs: [detect-changes, test-go]
+    if: >-
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.media-service == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./go-services/media-service
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/media-service:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/media-service:latest
+
+  build-push-spark:
+    needs: [detect-changes, test-spark]
+    if: >-
+      github.event_name == 'push' &&
+      (needs.detect-changes.outputs.spark-identity == 'true' ||
+       needs.detect-changes.outputs.spark-base == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push spark-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.spark.base
+          target: base
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/spark-base:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/spark-base:latest
+      - name: Tag spark-base for local use
+        run: docker tag ghcr.io/${{ github.repository }}/spark-base:${{ github.sha }} spark-base:latest
+      - name: Build and push spark-identity-daily-login-aggregates
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: pyspark_apps/identity/daily_login_aggregates/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/spark-identity-daily-login-aggregates:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/spark-identity-daily-login-aggregates:latest
+
+  build-push-pyflink:
+    needs: [detect-changes]
+    if: >-
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.pyflink == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.pyflink
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/pyflink:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/pyflink:latest

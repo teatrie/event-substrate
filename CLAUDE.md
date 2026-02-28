@@ -33,15 +33,17 @@ This platform is organized around explicit domain ownership. Violating these bou
 **Avro schemas:** Live in `avro/` with directory paths mapping to Kafka topic names (e.g., `avro/public/identity/login.events.avsc` → topic `public.identity.login.events`). Renaming topics requires re-registering schemas under the new `<topic>-value` subject.
 
 ## Deployment Checklist
-1. **Go changes:** `task build:consumer` or `task build:gateway` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
+1. **Go changes:** `task build:consumer` or `task build:gateway` → `task helm:install` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
 2. **Flink SQL changes:** `task k8s:configmaps` → delete + re-apply FlinkDeployment.
 3. **Migration changes:** `supabase db reset`
 4. **MinIO webhook changes:** `docker restart minio` → re-run `scripts/setup-minio-webhook.sh`
 5. **Airflow Helm values changes:** `task airflow:upgrade`
 6. **Grafana dashboard/alert/datasource changes:** `docker compose up -d --force-recreate grafana`
-7. **Before E2E tests:** `task start` (idempotent reconciliation)
-8. **Always run `task test:e2e`** after pipeline-affecting changes.
-9. **Persistent failures:** `task purge && task init`
+7. **Helm chart changes:** `task helm:template` (dry-run) → `task helm:install`
+8. **Spark job changes:** `task spark:build:identity` (or relevant app) → `task helm:install`
+9. **Before E2E tests:** `task start` (idempotent reconciliation)
+10. **Always run `task test:e2e`** after pipeline-affecting changes.
+11. **Persistent failures:** `task purge && task init`
 
 ## Key Knowledge
 - **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Use `/feature-epic` for multi-domain features (breaks into domains, runs TDD per domain). Add `/agent-team` to either for cost-effective model selection and escalation. Skip TDD for config/YAML, migrations, docs, one-line fixes.

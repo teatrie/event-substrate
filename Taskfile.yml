@@ -5,6 +5,7 @@ vars:
   CONSUMER_IMAGE: event-substrate-message-consumer:latest
   MEDIA_SERVICE_IMAGE: event-substrate-media-service:latest
   PYFLINK_IMAGE: pyflink-custom:1.18.0
+  SPARK_BASE_IMAGE: spark-base:latest
   SPARK_IMAGE: pyspark/identity-daily-login-aggregates:latest
 
 tasks:
@@ -246,14 +247,10 @@ tasks:
       - kubectl apply -f kubernetes/move-saga-deployment.yaml
 
   k8s:go-services:
-    desc: Build and deploy Go microservices to Kubernetes
+    desc: Build and deploy Go microservices + Spark apps via Helm
     deps: [build]
-    sources:
-      - go-services/api-gateway/routes.yaml
-      - kubernetes/go-services/*.yaml
     cmds:
-      - kubectl create configmap api-gateway-routes --from-file=routes.yaml=go-services/api-gateway/routes.yaml -n go-microservices --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f kubernetes/go-services/
+      - task: helm:install
 
   # ---------------------------------------------------------------------------
   # Airflow
@@ -363,6 +360,38 @@ tasks:
       - echo "✅ Batch layer purged."
 
   # ---------------------------------------------------------------------------
+  # Helm Chart (Go services + Spark apps)
+  # ---------------------------------------------------------------------------
+  helm:template:
+    desc: Render Helm chart templates (dry-run validation)
+    cmds:
+      - helm template event-substrate charts/event-substrate/
+
+  helm:install:
+    desc: Install/upgrade platform Helm chart (Go services + Spark apps)
+    cmds:
+      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl create namespace spark-apps --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl create serviceaccount spark -n spark-apps --dry-run=client -o yaml | kubectl apply -f -
+      # Adopt legacy kubectl-managed resources so Helm can take ownership.
+      # Idempotent — harmless if resources don't exist or are already Helm-managed.
+      - |
+        for resource in configmap/api-gateway-routes deployment/api-gateway deployment/message-consumer deployment/media-service service/api-gateway service/media-service scaledobject.keda.sh/message-consumer-scaledobject; do
+          kubectl annotate $resource -n go-microservices meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
+          kubectl label $resource -n go-microservices app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+        done
+        kubectl annotate sparkapplication/daily-login-aggregates -n spark-apps meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
+        kubectl label sparkapplication/daily-login-aggregates -n spark-apps app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+      - >-
+        helm upgrade --install event-substrate charts/event-substrate/
+
+  helm:uninstall:
+    desc: Uninstall platform Helm chart
+    cmds:
+      - helm uninstall event-substrate 2>/dev/null || true
+      - echo "✅ Helm release uninstalled."
+
+  # ---------------------------------------------------------------------------
   # Spark
   # ---------------------------------------------------------------------------
   spark:install:
@@ -377,14 +406,27 @@ tasks:
         --version 2.1.0
         || echo "Spark Operator already installed."
 
-  spark:build:
-    desc: Build Spark job Docker image (production target)
+  spark:build:base:
+    desc: Build Spark base Docker image (runtime + JARs + common/)
     sources:
-      - Dockerfile.spark
-      - pyspark_apps/**/*.py
+      - Dockerfile.spark.base
+      - pyspark_apps/common/**/*.py
       - pyspark_apps/pyproject.toml
     cmds:
-      - docker build --target production -t {{.SPARK_IMAGE}} -f Dockerfile.spark .
+      - docker build --target base -t {{.SPARK_BASE_IMAGE}} -f Dockerfile.spark.base .
+
+  spark:build:identity:
+    desc: Build identity daily-login-aggregates Spark app image
+    deps: [spark:build:base]
+    sources:
+      - pyspark_apps/identity/**/*.py
+      - pyspark_apps/identity/**/Dockerfile
+    cmds:
+      - docker build -t {{.SPARK_IMAGE}} -f pyspark_apps/identity/daily_login_aggregates/Dockerfile .
+
+  spark:build:
+    desc: Build all Spark job images (base + per-app)
+    deps: [spark:build:base, spark:build:identity]
 
   spark:test:
     desc: Run Spark job unit tests (local PySpark)
@@ -396,13 +438,13 @@ tasks:
   spark:test:docker:
     desc: Run Spark job unit tests in Docker (exact production base + pytest)
     cmds:
-      - docker build --target test -t spark-test:latest -f Dockerfile.spark .
+      - docker build --target test -t spark-test:latest -f Dockerfile.spark.base .
       - docker run --rm spark-test:latest
 
   spark:submit:
-    desc: Submit SparkApplication to K8s
+    desc: Submit SparkApplication to K8s (via Helm chart)
     cmds:
-      - kubectl apply -f kubernetes/spark-apps/
+      - task: helm:install
 
   spark:status:
     desc: Show SparkApplication status
@@ -516,13 +558,12 @@ tasks:
     desc: Stop everything
     cmds:
       - echo "🛑 Shutting down Event-Driven Substrate..."
-      - kubectl delete -f kubernetes/go-services/ -n go-microservices --ignore-not-found || true
+      - helm uninstall event-substrate 2>/dev/null || true
       - kubectl delete -f kubernetes/flink-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/pyflink-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/credit-check-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/ttl-expiry-deployment.yaml --ignore-not-found
       - kubectl delete -f kubernetes/move-saga-deployment.yaml --ignore-not-found
-      - kubectl delete sparkapplications --all -A --ignore-not-found 2>/dev/null || true
       - docker compose down
       - task: lineage:shutdown
       - supabase stop

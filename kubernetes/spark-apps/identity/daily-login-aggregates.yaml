@@ -21,7 +21,7 @@ spec:
   pythonVersion: "3"
   mode: cluster
   image: pyspark/identity-daily-login-aggregates:latest
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Never
   mainApplicationFile: local:///opt/spark/work-dir/pyspark_apps/identity/daily_login_aggregates/app.py
   arguments:
     - "--catalog"

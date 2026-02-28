@@ -1,0 +1,20 @@
+{{- if and .Values.goServices.messageConsumer.enabled .Values.goServices.messageConsumer.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: message-consumer-scaledobject
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  scaleTargetRef:
+    name: message-consumer
+  minReplicaCount: {{ .Values.goServices.messageConsumer.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.goServices.messageConsumer.keda.maxReplicas }}
+  triggers:
+  - type: kafka
+    metadata:
+      bootstrapServers: {{ .Values.goServices.messageConsumer.keda.bootstrapServers }}
+      consumerGroup: {{ .Values.goServices.messageConsumer.keda.consumerGroup }}
+      topic: {{ .Values.goServices.messageConsumer.keda.topic }}
+      lagThreshold: {{ .Values.goServices.messageConsumer.keda.lagThreshold | quote }}
+{{- end }}

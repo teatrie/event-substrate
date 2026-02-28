@@ -1,0 +1,83 @@
+{{- if .Values.spark.identityDailyLoginAggregates.enabled }}
+# SparkApplication CRD (sparkoperator.k8s.io/v1beta2) for the daily login
+# aggregates batch job.
+#
+# Reference manifest for manual `kubectl apply`. The Airflow DAG overrides
+# --dt with the actual execution date via Jinja templating ({{ "{{" }} ds {{ "}}" }}).
+#
+# Prerequisites:
+#   task spark:install   (installs Spark Operator)
+#   kubectl create namespace spark-apps --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl create serviceaccount spark -n spark-apps --dry-run=client -o yaml | kubectl apply -f -
+---
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: daily-login-aggregates
+  namespace: {{ .Values.spark.namespace }}
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: {{ .Values.spark.identityDailyLoginAggregates.image.repository }}:{{ .Values.spark.identityDailyLoginAggregates.image.tag }}
+  imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+  mainApplicationFile: local:///opt/spark/work-dir/pyspark_apps/identity/daily_login_aggregates/app.py
+  arguments:
+    {{- toYaml .Values.spark.identityDailyLoginAggregates.arguments | nindent 4 }}
+  sparkVersion: {{ .Values.spark.identityDailyLoginAggregates.sparkVersion | quote }}
+  restartPolicy:
+    type: Never         # Airflow handles retries at the task level
+
+  # ---------------------------------------------------------------------------
+  # Spark Configuration
+  #
+  # NOTE: This duplicates config from common/session.py. When the Spark Operator
+  # submits this job, sparkConf values are passed as --conf flags and take
+  # precedence over programmatic config. session.py remains the source of truth
+  # for non-Operator paths (unit tests, KubernetesPodOperator via Airflow DAG).
+  # This section is kept explicit to document what the Operator supports and to
+  # serve as a reference for tuning (shuffle partitions, AQE, volumes, etc.).
+  # ---------------------------------------------------------------------------
+  sparkConf:
+    {{- range $key, $val := .Values.spark.identityDailyLoginAggregates.sparkConf }}
+    {{ $key | quote }}: {{ $val | quote }}
+    {{- end }}
+
+  # ---------------------------------------------------------------------------
+  # Driver Pod
+  # ---------------------------------------------------------------------------
+  driver:
+    cores: {{ .Values.spark.identityDailyLoginAggregates.driver.cores }}
+    memory: {{ .Values.spark.identityDailyLoginAggregates.driver.memory | quote }}
+    serviceAccount: {{ .Values.spark.serviceAccount }}
+    env:
+      {{- toYaml .Values.spark.identityDailyLoginAggregates.env | nindent 6 }}
+    # Scratch space for shuffle spill, cached data, and temporary files.
+    # emptyDir uses the node's disk — sizeLimit prevents runaway spill
+    # from evicting the pod. For daily login aggregates this is generous;
+    # heavier jobs (historical backfills) may need 20-50Gi or a PVC.
+    volumeMounts:
+      - name: spark-local
+        mountPath: /tmp/spark-local
+
+  # ---------------------------------------------------------------------------
+  # Executor Pods
+  # ---------------------------------------------------------------------------
+  executor:
+    cores: {{ .Values.spark.identityDailyLoginAggregates.executor.cores }}
+    instances: {{ .Values.spark.identityDailyLoginAggregates.executor.instances }}
+    memory: {{ .Values.spark.identityDailyLoginAggregates.executor.memory | quote }}
+    env:
+      {{- toYaml .Values.spark.identityDailyLoginAggregates.env | nindent 6 }}
+    volumeMounts:
+      - name: spark-local
+        mountPath: /tmp/spark-local
+
+  # ---------------------------------------------------------------------------
+  # Volumes
+  # ---------------------------------------------------------------------------
+  volumes:
+    - name: spark-local
+      emptyDir:
+        sizeLimit: {{ .Values.spark.identityDailyLoginAggregates.scratchSizeLimit }}
+{{- end }}

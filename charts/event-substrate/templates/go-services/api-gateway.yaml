@@ -1,0 +1,81 @@
+{{- if .Values.goServices.apiGateway.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-routes
+  namespace: {{ .Values.goServices.namespace }}
+data:
+  routes.yaml: |
+    webhookRoutes:
+      login: {{ .Values.goServices.apiGateway.routes.webhookRoutes.login }}
+      signup: {{ .Values.goServices.apiGateway.routes.webhookRoutes.signup }}
+      signout: {{ .Values.goServices.apiGateway.routes.webhookRoutes.signout }}
+
+    externalRoutes:
+      message: {{ .Values.goServices.apiGateway.routes.externalRoutes.message }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  replicas: {{ .Values.goServices.apiGateway.replicas }}
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: api-gateway
+        image: {{ .Values.goServices.apiGateway.image.repository }}:{{ .Values.goServices.apiGateway.image.tag }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        ports:
+        - containerPort: {{ .Values.goServices.apiGateway.port }}
+        env:
+        {{- range $key, $val := .Values.goServices.apiGateway.env }}
+        - name: {{ $key }}
+          value: {{ $val | quote }}
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.goServices.apiGateway.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: {{ .Values.goServices.apiGateway.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - name: routes-config
+          mountPath: /app/routes.yaml
+          subPath: routes.yaml
+      volumes:
+      - name: routes-config
+        configMap:
+          name: api-gateway-routes
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: {{ .Values.goServices.namespace }}
+spec:
+  type: LoadBalancer
+  selector:
+    app: api-gateway
+  ports:
+  - port: {{ .Values.goServices.apiGateway.port }}
+    targetPort: {{ .Values.goServices.apiGateway.port }}
+{{- end }}
