@@ -1,0 +1,14 @@
+config:
+  MD013: false          # Line length — too strict for documentation
+  MD033: false          # Inline HTML — needed for some patterns
+  MD041: false          # First line heading — not all docs start with h1
+  MD060: false          # Table column style — compact tables are fine
+  MD036: false          # Emphasis as heading — used in skill/agent docs
+  MD028: false          # Blank line inside blockquote — false positive on GFM callouts
+
+ignores:
+  - "**/node_modules/**"
+  - ".pytest_cache/**"
+  - ".claude/projects/**"
+  - "**/AGENT.md"         # Symlinks to CLAUDE.md — don't lint twice
+  - ".antigravity/**"     # Internal rules, not project docs
