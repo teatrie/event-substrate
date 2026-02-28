@@ -22,6 +22,8 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 *   **Data Lake:** MinIO (S3) + Project Nessie (Iceberg REST Catalog)
 *   **Analytical Warehouse:** ClickHouse (Real-Time OLAP)
 *   **Build System:** Task (go-task) with incremental change detection
+*   **K8s Packaging:** Helm chart (`charts/event-substrate/`) for Go services + Spark apps
+*   **CI/CD:** GitHub Actions with path-filtered builds + GHCR image push
 *   **Monitoring:** OpenTelemetry + Prometheus + Grafana + Jaeger
 *   **Batch Orchestration:** Apache Airflow 3.1.7 (Helm 1.19.0 on K8s, KubernetesExecutor)
 *   **Batch Processing:** Apache Spark 4.0.2 (Spark Operator on K8s, Iceberg REST Catalog)
@@ -102,8 +104,10 @@ When extending or maintaining this platform, **strict adherence to framework and
 
 ## Directory Structure
 - `Taskfile.yml`: Build system definition with incremental change detection for Go services.
+- `.github/workflows/`: GitHub Actions CI (path-filtered builds + GHCR push) and deploy skeleton (staging/production).
 - `avro/`: Avro schemas organized by domain (e.g., `avro/public/identity/login.events.avsc`). Directory paths map to Kafka topic names.
 - `airflow/`: Airflow DAGs, Helm values (local + prod), and PV/PVC manifests for KubernetesExecutor deployment.
+- `charts/event-substrate/`: Helm chart for Go services and Spark SparkApplication CRDs.
 - `clickhouse/`: Initialization SQL scripts for the embedded analytical datastore.
 - `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
 - `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
@@ -213,15 +217,25 @@ task shutdown
 | `task airflow:logs:scheduler` | Tail Airflow scheduler logs |
 | `task airflow:logs:api-server` | Tail Airflow API server logs |
 
+**Helm Chart**
+
+| Command | Description |
+|---|---|
+| `task helm:template` | Render Helm chart templates (dry-run validation) |
+| `task helm:install` | Install/upgrade platform Helm chart (Go services + Spark apps) |
+| `task helm:uninstall` | Uninstall platform Helm release |
+
 **Spark**
 
 | Command | Description |
 |---|---|
 | `task spark:install` | Install Spark Operator on K8s via Helm (one-time) |
-| `task spark:build` | Build Spark job Docker image (production target, change-detected) |
+| `task spark:build` | Build all Spark images (base + per-app) |
+| `task spark:build:base` | Build shared Spark base image (`Dockerfile.spark.base` — runtime + JARs + common/) |
+| `task spark:build:identity` | Build identity daily-login-aggregates app image (thin layer on spark-base) |
 | `task spark:test` | Run Spark job unit tests locally (PySpark `local[*]`, fast iteration) |
 | `task spark:test:docker` | Run Spark job unit tests in Docker (exact production base + pytest) |
-| `task spark:submit` | Submit SparkApplication to K8s |
+| `task spark:submit` | Submit SparkApplication to K8s via Helm |
 | `task spark:status` | Show SparkApplication status |
 | `task spark:logs` | Tail Spark driver logs |
 | `task spark:purge` | Uninstall Spark Operator and delete namespace |

@@ -175,3 +175,4 @@ After merging PR 1, update PR 2's base to `main` (GitHub may do this automatical
 - **Return to main.** After all PRs are created (and merged, if applicable), `git checkout main` so the working tree is back to the starting branch.
 - **Respect user hints.** If `$ARGUMENTS` contains grouping preferences (e.g., "keep docs separate", "group all infra"), honor them.
 - **Audit ignore files.** Never commit compiled binaries, cache dirs, or agent state. If `.gitignore` or `.claudeignore` need updates, include them in the first PR.
+- **CI minutes awareness.** Before presenting the plan, check repo visibility (`gh api /repos/{owner}/{repo} --jq '.private'`). If the repo is **private**, warn the user: "This repo is private — GitHub Free tier has 2,000 CI minutes/month. Each merged PR triggers CI builds. Consider batching PRs (max 1-2 merges/day) or choosing 'create PRs only' and merging them together." If public, no warning needed (unlimited free minutes).

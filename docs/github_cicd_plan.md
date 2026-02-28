@@ -209,8 +209,17 @@ To protect the data pipeline, the backend CI enforces strict **Schema Evolution*
 
 ---
 
-## 9. Next Steps
-1. **Refactor `docker-compose.yml`**: Apply profiles and environment variables for Lean CI.
-2. **Initialize Pulumi**: Create a `deploy/` directory and configure the S3/GCS backend.
-3. **Define GitHub Actions**: Create `.github/workflows/` with path-based filtering.
-4. **Build Admin Dashboard**: Implement a "Stack Visualizer" component in the Vite frontend.
+## 9. Implementation Status
+
+| Item | Status | Notes |
+|---|---|---|
+| GitHub Actions CI workflow (`.github/workflows/ci.yml`) | **Done** | Path-filtered builds, tests, GHCR push |
+| GitHub Actions deploy skeleton (`.github/workflows/deploy.yml`) | **Done** | Staging + production jobs commented out pending Pulumi |
+| Helm chart (`charts/event-substrate/`) | **Done** | Go services + Spark apps, replaces raw kubectl manifests |
+| Spark Docker split (base + per-app) | **Done** | `Dockerfile.spark.base` + per-app thin Dockerfiles |
+| Taskfile Helm integration | **Done** | `helm:install`, `helm:template`, `helm:uninstall` tasks |
+| GHCR image push | **Done** | `ghcr.io/<owner>/event-substrate/<service>:<sha>` |
+| Lean CI profile (Docker Compose profiles) | Proposed | Not yet implemented — see Section 3 |
+| Pulumi IaC (`deploy/` directory) | Roadmap | Pending cloud infra setup |
+| Admin dashboard (Stack Visualizer) | Roadmap | Future frontend feature |
+| Schema Registry CI compatibility check | Roadmap | `curl` check against registry before merge |
