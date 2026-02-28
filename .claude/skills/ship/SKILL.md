@@ -69,7 +69,7 @@ Keep the number of PRs reasonable (2-6 typically). Don't over-split — a PR wit
 
 Output a numbered plan like:
 
-```
+```text
 PR 1: "feat(schemas): add media upload/download Avro schemas"
   Files: avro/public/media/upload.approved.avsc, avro/public/media/upload.rejected.avsc, ...
   Depends on: (none — merges first)
@@ -84,6 +84,7 @@ PR 3: ...
 ### Step 4: Wait for Approval
 
 **Stop and ask the user** to confirm the grouping using the AskUserQuestion tool. Present clear options:
+
 - "Looks good, proceed and merge" — create PRs and merge them sequentially (delete branch after each merge)
 - "Looks good, create PRs only" — create PRs but do not merge
 - "I want to adjust the grouping" (let the user describe changes, then re-plan)
@@ -113,7 +114,8 @@ Use the prefix `ship/` for all branches (e.g., `ship/media-schemas`, `ship/media
 Stage **only** the files belonging to this PR group. For untracked files, `git add <file>`. For modifications, `git add <file>`. Write a descriptive conventional commit message.
 
 End every commit message with:
-```
+
+```text
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
@@ -126,6 +128,7 @@ git push -u origin ship/<short-name>
 Create the PR with `gh pr create`. Set the **base branch** to the previous PR's branch (or `main` for the first PR). This ensures each PR only shows its own diff.
 
 Use this format:
+
 ```bash
 gh pr create --base <base-branch> --title "<title>" --body "$(cat <<'EOF'
 ## Summary
@@ -151,7 +154,7 @@ Save each PR's URL and number for the summary and for setting base branches on s
 
 After all PRs are created, output a final summary:
 
-```
+```text
 ## Ship Complete 🚢
 
 Merge these PRs in order:

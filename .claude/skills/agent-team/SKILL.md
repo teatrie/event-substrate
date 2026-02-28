@@ -25,6 +25,7 @@ Before starting any planning or execution phase, verify which model you are runn
 ### Step 1: Systems Analysis
 
 When given a feature request (or a set of remaining domains from an epic), analyze:
+
 1. **Domain inventory:** List each distinct architectural component that needs work (e.g., Go service, PyFlink job, frontend, SQL migration, Avro schemas).
 2. **Language/service boundaries:** Identify which domains are in isolated codebases or languages.
 3. **Dependency graph:** Map which domains produce artifacts consumed by others (e.g., schemas, events, APIs).
@@ -39,6 +40,7 @@ When given a feature request (or a set of remaining domains from an epic), analy
 Based on the systems analysis, organize work into **waves** of parallel teams:
 
 **Wave assignment rules:**
+
 - Domains with **no cross-dependencies** and **no shared files** can run in the same wave (parallel).
 - A domain that **consumes output from another domain** must be in a later wave (sequential).
 - **Test domains are mandatory and always in the final implementation wave** (they require all code complete):
@@ -47,11 +49,17 @@ Based on the systems analysis, organize work into **waves** of parallel teams:
 - Documentation is always last.
 
 **Team structure:**
+
 - **1 team per domain** within a wave. Each team gets a strict domain role (e.g., "Go media-service handler", "PyFlink processor", "Frontend component").
-- Use the `TeamCreate` tool to create the team, then spawn teammates via `Task` with `team_name`.
+**TeamCreate is MANDATORY for parallel work:**
+- ALWAYS call `TeamCreate` before spawning any parallel teammates.
+- Spawn teammates via `Task` with the `team_name` parameter — this gives each agent its own tmux window, providing the user visibility into agent progress.
+- NEVER use bare `Task` with `run_in_background` for parallel orchestration — those agents run invisibly with no user monitoring capability.
+- For sequential single-domain work (1 subagent at a time), plain `Task` is acceptable.
 - Each teammate runs its own R-G-R loop independently.
 
 **When NOT to use teams:**
+
 - If only 1 domain remains, use a single sequential subagent (no team overhead).
 - If all remaining domains are tightly coupled (shared files, sequential dependencies), run them sequentially with one subagent at a time.
 
@@ -68,14 +76,17 @@ Each team (or sequential subagent) must execute strict Red-Green-Refactor:
 ### Step 4: Synchronization
 
 **Cross-team contracts:**
+
 - Before Wave 1 begins, all shared contracts (Avro schemas, Protobuf definitions, interface types) must be locked. If schemas were defined in an earlier domain (e.g., D1), they are already locked.
 - If a wave requires new cross-domain contracts, define them first as a pre-wave task before any team starts RED.
 
 **Wave gating:**
+
 - A wave does NOT start until ALL teams in the previous wave have completed their R-G-R loops.
 - The orchestrator verifies each team's completion (all tests green, refactor done) before advancing to the next wave.
 
 **Intra-domain parallelism:**
+
 - Within a single domain, independent sub-tasks (e.g., download handler vs delete handler) may run RED in parallel if they produce **separate test files**.
 - GREEN and REFACTOR for sub-tasks within the same package should run **sequentially** to avoid file conflicts.
 

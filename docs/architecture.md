@@ -144,6 +144,7 @@ ClickHouse authenticates as `clickhouse-consumer` and pipes the `internal.platfo
    - Jaeger uses Badger disk-backed storage (named `jaeger_data` volume) for persistence across restarts
 
 **Health Check Endpoints:**
+
 - All Go services expose `/healthz:8080` (liveness probe) and `/readyz:8080` (readiness probe, checks Kafka/DB)
 - Kubernetes liveness and readiness probes target these endpoints for automatic pod restart/traffic control
 
@@ -234,6 +235,7 @@ The env-var-driven design (`KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA
 Five Flink deployments run in the Kubernetes cluster: `credit_check_processor`, `ttl_expiry_processor`, `move_saga_processor`, `media_notification_processor`, and identity processors. Each deployment consists of a JobManager (coordinator) and one or more TaskManagers (workers).
 
 **Resource Requests Per Deployment:**
+
 - **JobManager:** 250m CPU / 256Mi RAM (lightweight coordinator, no data processing)
 - **TaskManager:** 500m CPU / 256Mi RAM per pod (worker processes actual stream data)
 
@@ -242,6 +244,7 @@ Five Flink deployments run in the Kubernetes cluster: `credit_check_processor`, 
 ### Scaling Message Consumer (KEDA)
 
 The `message-consumer` horizontally scales via KEDA based on Kafka topic lag:
+
 - **Min replicas:** 1
 - **Max replicas:** 10 (or higher in production)
 - **Target lag threshold:** 5 messages

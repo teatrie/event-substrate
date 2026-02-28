@@ -23,6 +23,7 @@ All Docker Compose services must be replaced with cloud-managed equivalents. Sel
 | **Kubernetes** (OrbStack) | GKE (Autopilot or Standard) | EKS (Managed Node Groups or Fargate) | — |
 
 ### Current Files Defining Local Infrastructure
+
 - `docker-compose.yml` — all 11 services
 - `redpanda-bootstrap.yaml` — Redpanda Iceberg + cloud storage config
 - `clickhouse/init.sql` — ClickHouse table definitions (Kafka broker list hardcoded to `redpanda:29092`)
@@ -71,6 +72,7 @@ Every credential below is currently stored in plaintext and checked into version
 | **Pod Identity** | Workload Identity (no JSON key files) | IRSA (IAM Roles for Service Accounts) |
 
 **Steps:**
+
 1. Install External Secrets Operator in the cluster
 2. Create `SecretStore` resource pointing to the cloud secret manager
 3. Create `ExternalSecret` resources for each credential
@@ -142,9 +144,11 @@ Every `host.docker.internal` and `localhost` reference must become an environmen
 | **DNS** | Cloud DNS | Route 53 |
 
 ### CORS Lockdown
+
 `go-services/api-gateway/main.go:267` currently sets `Access-Control-Allow-Origin: *`. This must be restricted to the production frontend domain(s).
 
 ### MinIO/GCS CORS for Browser-Direct Uploads
+
 The `media-uploads` MinIO bucket has permissive CORS (`*`) configured by `scripts/minio-init.sh`. In production, the GCS bucket CORS policy must restrict `AllowedOrigins` to the production frontend domain(s) and limit `AllowedMethods` to `PUT` only.
 
 ---
@@ -163,6 +167,7 @@ No deployment currently defines `resources.requests` or `resources.limits`:
 Flink deployments define JobManager/TaskManager resources at the FlinkDeployment level but lack pod-level container limits.
 
 **Action:** Add resource blocks to every container spec:
+
 ```yaml
 resources:
   requests:
@@ -178,8 +183,10 @@ resources:
 Neither Go microservice exposes a health endpoint. Both K8s deployments lack liveness and readiness probes.
 
 **Action:**
+
 1. Add `/healthz` and `/readyz` HTTP endpoints to `api-gateway` and `message-consumer`
 2. Add probe definitions to K8s manifests:
+
 ```yaml
 livenessProbe:
   httpGet:
@@ -198,6 +205,7 @@ readinessProbe:
 ### Missing Security Contexts
 
 **Action:** Add to every pod spec:
+
 ```yaml
 securityContext:
   runAsNonRoot: true
@@ -208,6 +216,7 @@ securityContext:
 ### Image Pull Policy
 
 All deployments use `imagePullPolicy: IfNotPresent` with `latest` tags:
+
 - `kubernetes/go-services/api-gateway.yaml:19`
 - `kubernetes/go-services/message-consumer.yaml:19`
 - `kubernetes/flink-deployment.yaml:8`
@@ -218,6 +227,7 @@ All deployments use `imagePullPolicy: IfNotPresent` with `latest` tags:
 ### Pod Disruption Budgets
 
 **Action:** Add PDBs for all stateless services to ensure zero-downtime during node drains:
+
 ```yaml
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -239,6 +249,7 @@ spec:
 | PyFlink echo processor | `kubernetes/pyflink-deployment.yaml:63` | parallelism: 1 |
 
 **Action:**
+
 - `api-gateway`: Minimum 2 replicas + HPA based on CPU/request rate
 - `message-consumer`: KEDA already handles scaling (min 1 → max 15), but validate threshold tuning for production traffic patterns
 - Flink: Increase `parallelism` to match expected topic partition count
@@ -248,6 +259,7 @@ spec:
 Both Flink deployments use `upgradeMode: stateless` (`flink-deployment.yaml:68`, `pyflink-deployment.yaml:64`). This means all in-flight data is **lost** during upgrades.
 
 **Action:** Switch to `upgradeMode: savepoint` and configure checkpointing:
+
 ```yaml
 flinkConfiguration:
   state.checkpoints.dir: s3://bucket/flink/checkpoints
@@ -325,6 +337,7 @@ Local dev uses anonymous admin access (`GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUT
 | **Azure** | Entra ID (AAD) | `GF_AUTH_AZUREAD_ENABLED=true`, `GF_AUTH_AZUREAD_CLIENT_ID=<app-id>`, `GF_AUTH_AZUREAD_CLIENT_SECRET=<from-key-vault>`, `GF_AUTH_AZUREAD_TENANT_ID=<tenant-id>`, `GF_AUTH_AZUREAD_AUTH_URL=https://login.microsoftonline.com/<tenant>/oauth2/v2.0/authorize`, `GF_AUTH_AZUREAD_TOKEN_URL=https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` |
 
 **Production steps:**
+
 1. Disable anonymous access: `GF_AUTH_ANONYMOUS_ENABLED=false`, remove `GF_AUTH_DISABLE_LOGIN_FORM`
 2. Set the provider env vars above (store secrets via ESO from Section 2)
 3. Configure role mapping: `GF_AUTH_<PROVIDER>_ROLE_ATTRIBUTE_PATH` to map IdP groups → Grafana roles (Admin/Editor/Viewer)
@@ -344,6 +357,7 @@ Local dev uses named Docker volumes (Prometheus TSDB, Jaeger Badger, Loki filesy
 | **Grafana** | Ephemeral (anonymous admin, no persistence needed) | Grafana Cloud, or self-hosted with Cloud SQL backend + IAP auth | Grafana Cloud, or self-hosted with RDS backend + Cognito auth |
 
 **Config swap paths (no application changes):**
+
 - **Prometheus → Thanos:** Add Thanos sidecar to Prometheus pod, configure `--objstore.config` for GCS/S3 bucket. Remote-write continues to work unchanged.
 - **Jaeger → Tempo:** Change OTel Collector exporter from `otlp` (Jaeger) to `otlp` (Tempo endpoint). Same OTLP protocol, different backend.
 - **Loki → GCS/S3:** Update `storage_config` in `loki-config.yaml` from `filesystem` to `gcs` or `aws`. Schema and queries remain identical.
@@ -351,6 +365,7 @@ Local dev uses named Docker volumes (Prometheus TSDB, Jaeger Badger, Loki filesy
 ### Log Retention
 
 Define retention policies for all telemetry data:
+
 - Metrics: 90 days (high resolution), 1 year (downsampled)
 - Logs: 30 days hot, 90 days cold storage
 - Traces: 7 days hot, 30 days cold storage
@@ -389,6 +404,7 @@ Image tags use the full git SHA (`ghcr.io/<owner>/event-substrate/<service>:<sha
 ### Deploy Strategy (Model 4 — Hybrid)
 
 The deploy workflow uses a batching strategy:
+
 - CI builds run per-merge (parallel, path-filtered)
 - Deploys batch via `concurrency` group — latest commit on `main` wins
 - One manual approval gate covers all changes since last production deploy
@@ -421,6 +437,7 @@ For production, GHCR can be replaced with cloud-native registries:
 ### Flink Job Versioning
 
 Flink SQL changes require careful rollout:
+
 1. Deploy new ConfigMap with updated SQL
 2. Trigger Flink savepoint on running job
 3. Cancel old job
@@ -448,6 +465,7 @@ Supabase Cloud is **AWS-only** (17 AWS regions). A GCP deployment requires cross
 - **Cross-region latency** (e.g., GCP `us-west1` ↔ AWS `us-east-1`): ~60-80ms round-trip
 
 **Mitigation options:**
+
 1. Co-locate GKE in the same metro as the Supabase AWS region (e.g., both in `us-east-1` / `us-east1`)
 2. Use Supabase's connection pooler (PgBouncer on port 6543) to reduce connection overhead
 3. Consider a VPN tunnel or interconnect for private, lower-latency routing
@@ -490,6 +508,7 @@ Option 1 is recommended — it keeps each deployment path simple and idiomatic r
 Supabase Cloud runs on AWS. Deploying EKS in the **same AWS region** as your Supabase project eliminates cross-cloud latency entirely.
 
 **Networking options:**
+
 1. **VPC Peering** — Connect EKS VPC to Supabase's VPC (if Supabase offers PrivateLink on your plan)
 2. **Public endpoint** — Use Supabase's public endpoint with `sslmode=require` (simplest; adequate for most workloads)
 3. **AWS PrivateLink** — Available on Supabase Pro/Enterprise plans for zero-public-internet database access
@@ -509,12 +528,16 @@ Supabase Cloud runs on AWS. Deploying EKS in the **same AWS region** as your Sup
 ## 11. Media Upload: MinIO → Cloud Storage Migration
 
 ### Presigned URL Migration (MinIO → GCS/S3)
+
 The `upload_handler.go` uses `CreditChecker` and `URLSigner` interfaces. In production:
+
 - **GCP:** Replace MinIO presigned URLs with [GCS V4 Signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls). Use Workload Identity — no JSON key files. The `URLSigner` interface abstracts this swap.
 - **AWS:** Replace with [S3 Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html). Use IRSA for credentials.
 
 ### Storage Event Bridge (MinIO Webhook → Cloud Pub/Sub)
+
 MinIO fires S3 event notifications via webhook to the media-service (`POST /webhooks/media-upload` for `uploads/` prefix, `POST /webhooks/file-ready` for `files/` prefix). In production:
+
 - **GCP:** Replace with [GCS Pub/Sub notifications](https://cloud.google.com/storage/docs/pubsub-notifications). A Cloud Function or small adapter service subscribes to the Pub/Sub topic and produces to Kafka (or the media-service webhook handlers listen on a Pub/Sub subscription instead of HTTP webhooks).
 - **AWS:** Replace with [S3 Event Notifications → SNS/SQS](https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html). Route to a Lambda or the media-service webhook handlers via SQS.
 
@@ -531,7 +554,9 @@ MinIO fires S3 event notifications via webhook to the media-service (`POST /webh
 | `SUPABASE_JWKS_URL` | api-gateway | JWKS endpoint for ES256 public key fetch (e.g., `https://<project>.supabase.co/auth/v1/.well-known/jwks.json`) |
 
 ### Media Upload CORS Bucket Policy
+
 The MinIO `media-uploads` bucket uses permissive CORS for local dev. In production, lock down:
+
 - `AllowedOrigins`: production frontend domain only
 - `AllowedMethods`: `PUT` only
 - `AllowedHeaders`: `Content-Type`, `Content-Length`

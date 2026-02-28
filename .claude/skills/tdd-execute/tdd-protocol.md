@@ -22,8 +22,13 @@ touch .tdd-active
 - Spawn `tdd-green` subagent with failing tests + target files
 - Agent writes **minimum code** to pass ALL tests
 - Confirm ALL tests pass
+- Run `task lint:fix` to auto-fix formatting and import ordering
+- Run `task lint` to confirm no remaining violations
+  - If lint violations remain, fix them manually
+  - Type errors and security vulnerabilities are correctness issues
 
 **Git checkpoint (unconditional):**
+
 ```bash
 git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
 ```
@@ -31,12 +36,14 @@ git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
 ### Step 4 — REFACTOR: Clean the code (guarded by checkpoint)
 
 **Refactor scope (priority order):**
+
 1. Standards & conventions — match project patterns, language idioms
 2. Simplicity — remove unnecessary complexity, dead code, premature abstractions
 3. Readability & maintainability — clear naming, obvious flow
 4. Performance — only for obvious inefficiencies, not speculative
 
 **Constraints:**
+
 - ONLY touch files written/modified in this domain
 - Do NOT add abstractions, helpers, or "improvements" beyond scope
 - Do NOT touch unrelated files
@@ -50,7 +57,7 @@ git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
 | 3 | `tdd-refactor` (escalate to HIGHER model) | `git reset --hard HEAD` — skip refactor, code is already green |
 
 - Escalated agent gets **GREEN checkpoint code** + refactor criteria (NOT the failed diff)
-- Tests pass → continue to Step 5
+- Tests pass → run `task lint:fix` then `task lint` — if lint fails, that counts as a refactor failure (reset + next attempt)
 - All 3 fail → ship the GREEN code — working beats perfect
 
 ### Step 5 — POST: Soft reset and domain commit

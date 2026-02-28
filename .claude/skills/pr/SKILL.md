@@ -15,6 +15,7 @@ Unlike `/ship`, this does NOT group changes into multiple PRs. It treats the wor
 ## Step 1: Inventory
 
 Run `git status` and `git log --oneline origin/main..HEAD` to understand:
+
 - Are there uncommitted changes?
 - Are there unpushed commits?
 - What's the total diff?
@@ -22,15 +23,19 @@ Run `git status` and `git log --oneline origin/main..HEAD` to understand:
 ## Step 2: Branch & Commit
 
 If there are uncommitted changes:
+
 1. Create a branch: `git checkout -b pr/<short-name>` (derive name from changes or user hint)
 2. Stage relevant files (`git add` — never add secrets, binaries, or cache dirs)
 3. Commit with a conventional commit message ending with:
-   ```
+
+   ```text
    Co-Authored-By: Claude <model> <noreply@anthropic.com>
    ```
+
    (Use the actual model name — Opus 4.6, Sonnet 4.6, or Haiku 4.5)
 
 If there are only unpushed commits (clean working tree):
+
 1. Create a branch from HEAD: `git checkout -b pr/<short-name>`
    (The branch carries the unpushed commits)
 
@@ -41,6 +46,7 @@ git push -u origin pr/<short-name>
 ```
 
 Create the PR:
+
 ```bash
 gh pr create --base main --title "<title>" --body "$(cat <<'EOF'
 ## Summary
@@ -64,6 +70,7 @@ Check whether the changed files match any CI path filter that triggers build/tes
 - `flink_jobs/**` — Flink SQL changes
 
 Files that do NOT trigger any build/test job (CI-silent paths):
+
 - `docs/**`, `README.md`, `CLAUDE.md`, `*.md` (documentation)
 - `.claude/**` (agent skills, config)
 - `avro/**` (schemas — no CI job yet)
@@ -77,6 +84,7 @@ Compare the list of changed files against the trigger paths. If **none** of the 
 ### Step 4b: Ask user
 
 **If CI will run** (changed files match trigger paths), ask the user:
+
 - **"Wait for CI, then merge"** — poll CI status, then merge on success
 - **"Merge now"** — merge immediately without waiting
 - **"Leave open"** — leave the PR open for manual review
@@ -86,22 +94,27 @@ Compare the list of changed files against the trigger paths. If **none** of the 
 
 Then merge immediately: `gh pr merge <number> --merge --delete-branch`
 
-### If "Wait for CI, then merge":
+### If "Wait for CI, then merge"
+
 ```bash
 gh pr checks <number> --watch --fail-fast
 ```
+
 - If all checks pass: `gh pr merge <number> --merge --delete-branch`, then `git checkout main && git pull`
 - If any check fails: report the failure, do NOT merge, suggest the user inspect the logs
 
-### If "Merge now":
+### If "Merge now"
+
 `gh pr merge <number> --merge --delete-branch`, then `git checkout main && git pull`
 
-### If "Leave open":
+### If "Leave open"
+
 Report the PR URL and return to `main`: `git checkout main`
 
 ## Step 5: Clean Up
 
 After merge (if applicable):
+
 ```bash
 git checkout main
 git pull origin main

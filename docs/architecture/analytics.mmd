@@ -9,7 +9,7 @@ graph TD
 
     %% ── Source nodes ──────────────────────────────────────────────────────────
     Redpanda["Redpanda Broker"]:::broker
-    MinIO[("MinIO / S3\n(object storage)")]:::db
+    MinIO[(MinIO / S3\nobject storage)]:::db
     SchemaReg["Schema Registry"]:::registry
     AuthInit["redpanda-auth-init"]:::registry
     API["api-gateway\n(Go)"]:::gateway
@@ -26,8 +26,8 @@ graph TD
     DeleteTopic(["public.media.delete.events"]):::broker
 
     %% ── Bootstrap dependencies ────────────────────────────────────────────────
-    MinIO -->|"object store\n(tiered storage + Iceberg data)"| Redpanda
-    Nessie -->|"Iceberg REST Catalog\n(metadata)"| Redpanda
+    MinIO -->|object store\ntiered storage + Iceberg data| Redpanda
+    Nessie -->|Iceberg REST Catalog\nmetadata| Redpanda
     AuthInit -->|depends_on| Redpanda
     SchemaReg -->|depends_on| AuthInit
 
@@ -46,7 +46,7 @@ graph TD
     subgraph DataLake["Data Lake (Iceberg)"]
         direction TB
         Nessie["Nessie\n(Iceberg REST Catalog)"]:::registry
-        IcebergMinIO[("MinIO / S3\n(Parquet files)")]:::db
+        IcebergMinIO[(MinIO / S3\nParquet files)]:::db
         IcebergLogin["iceberg: login_events\n(Parquet)"]:::db
         IcebergSignup["iceberg: signup_events\n(Parquet)"]:::db
         IcebergSignout["iceberg: signout_events\n(Parquet)"]:::db
@@ -57,19 +57,19 @@ graph TD
         IcebergDownload["iceberg: media_download_events\n(Parquet)"]:::db
         IcebergDelete["iceberg: media_delete_events\n(Parquet)"]:::db
 
-        Nessie -->|"manages metadata"| IcebergMinIO
+        Nessie -->|manages metadata| IcebergMinIO
     end
 
     %% Tiered storage materializes all public + internal topics into Iceberg
-    LoginTopic -->|"Tiered Storage → Parquet"| IcebergLogin
-    SignupTopic -->|"Tiered Storage → Parquet"| IcebergSignup
-    SignoutTopic -->|"Tiered Storage → Parquet"| IcebergSignout
-    UnifiedTopic -->|"Tiered Storage → Parquet"| IcebergUnified
-    EchoTopic -->|"Tiered Storage → Parquet"| IcebergEcho
-    MessageTopic -->|"Tiered Storage → Parquet"| IcebergMessage
-    UploadTopic -->|"Tiered Storage → Parquet"| IcebergUpload
-    DownloadTopic -->|"Tiered Storage → Parquet"| IcebergDownload
-    DeleteTopic -->|"Tiered Storage → Parquet"| IcebergDelete
+    LoginTopic -->|Tiered Storage → Parquet| IcebergLogin
+    SignupTopic -->|Tiered Storage → Parquet| IcebergSignup
+    SignoutTopic -->|Tiered Storage → Parquet| IcebergSignout
+    UnifiedTopic -->|Tiered Storage → Parquet| IcebergUnified
+    EchoTopic -->|Tiered Storage → Parquet| IcebergEcho
+    MessageTopic -->|Tiered Storage → Parquet| IcebergMessage
+    UploadTopic -->|Tiered Storage → Parquet| IcebergUpload
+    DownloadTopic -->|Tiered Storage → Parquet| IcebergDownload
+    DeleteTopic -->|Tiered Storage → Parquet| IcebergDelete
 
     %% Iceberg tables write Parquet into MinIO via Nessie
     IcebergLogin --> IcebergMinIO
@@ -87,20 +87,20 @@ graph TD
         direction TB
         CHKafka["ClickHouse\nKafka Table Engine\n(SASL: clickhouse-consumer)"]:::olap
         CHMV["Materialized View"]:::olap
-        CHMergeTree[("unified_events\nReplacingMergeTree")]:::olap
+        CHMergeTree[(unified_events\nReplacingMergeTree)]:::olap
 
-        CHKafka -->|"stream insert"| CHMV
-        CHMV -->|"deduplicated writes"| CHMergeTree
+        CHKafka -->|stream insert| CHMV
+        CHMV -->|deduplicated writes| CHMergeTree
     end
 
     %% ClickHouse bootstrap dependency
     Redpanda -->|depends_on| CHKafka
 
     %% unified events feed ClickHouse
-    UnifiedTopic -->|"Kafka Table Engine\nconsumes via SASL"| CHKafka
+    UnifiedTopic -->|Kafka Table Engine\nconsumes via SASL| CHKafka
 
     %% ClickHouse fetches schemas from Schema Registry
-    SchemaReg -->|"fetch Avro schemas"| CHKafka
+    SchemaReg -->|fetch Avro schemas| CHKafka
 
     %% ── Observability Stack ───────────────────────────────────────────────────
     subgraph ObservabilityStack["Observability Stack"]
@@ -112,13 +112,13 @@ graph TD
         Grafana["Grafana\n(6 dashboards, 12 alerts)"]:::telemetry
         KSM["kube-state-metrics\n(NodePort 30080)"]:::telemetry
 
-        OTel -->|"scrape / remote_write"| Prometheus
-        OTel -->|"log forwarding"| Loki
-        OTel -->|"trace export"| Jaeger
-        KSM -->|"Prometheus scrape"| Prometheus
-        Prometheus -->|"metrics datasource"| Grafana
-        Loki -->|"log datasource"| Grafana
-        Jaeger -->|"trace datasource"| Grafana
+        OTel -->|scrape / remote_write| Prometheus
+        OTel -->|log forwarding| Loki
+        OTel -->|trace export| Jaeger
+        KSM -->|Prometheus scrape| Prometheus
+        Prometheus -->|metrics datasource| Grafana
+        Loki -->|log datasource| Grafana
+        Jaeger -->|trace datasource| Grafana
     end
 
     %% Flink processors emit StatsD → OTel
@@ -127,14 +127,14 @@ graph TD
     FlinkSignout["Flink: signout_processor"]:::stream
     FlinkUnified["Flink: unified_processor"]:::stream
 
-    FlinkLogin -->|"StatsD metrics"| OTel
-    FlinkSignup -->|"StatsD metrics"| OTel
-    FlinkSignout -->|"StatsD metrics"| OTel
-    FlinkUnified -->|"StatsD metrics"| OTel
+    FlinkLogin -->|StatsD metrics| OTel
+    FlinkSignup -->|StatsD metrics| OTel
+    FlinkSignout -->|StatsD metrics| OTel
+    FlinkUnified -->|StatsD metrics| OTel
 
     %% API Gateway emits OTLP → OTel
-    API -->|"OTLP gRPC (metrics + traces)"| OTel
+    API -->|OTLP gRPC: metrics + traces| OTel
 
     %% Airflow emits OTLP HTTP → OTel
     Airflow["Airflow\n(scheduler, workers)"]:::stream
-    Airflow -->|"OTLP HTTP :4318\n(metrics + traces)"| OTel
+    Airflow -->|OTLP HTTP :4318\nmetrics + traces| OTel

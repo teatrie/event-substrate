@@ -25,7 +25,7 @@ services:
       nessie:
         condition: service_started
     healthcheck:
-      test: [ "CMD", "rpk", "cluster", "health" ]
+      test: ["CMD", "rpk", "cluster", "health"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -40,7 +40,7 @@ services:
         condition: service_healthy
     volumes:
       - ./scripts/setup-redpanda-auth-internal.sh:/setup.sh:ro
-    entrypoint: [ "/bin/bash", "/setup.sh" ]
+    entrypoint: ["/bin/bash", "/setup.sh"]
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -90,7 +90,7 @@ services:
       - minio
     volumes:
       - ./scripts/minio-init.sh:/minio-init.sh:ro
-    entrypoint: [ "/bin/sh", "/minio-init.sh" ]
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
 
   nessie:
     image: ghcr.io/projectnessie/nessie:latest
@@ -109,7 +109,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -161,7 +161,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.90.0
     container_name: otel-collector
-    command: [ "--config=/etc/otel-collector-config.yaml" ]
+    command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./telemetry/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:

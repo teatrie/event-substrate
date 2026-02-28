@@ -29,7 +29,7 @@ exporters:
     endpoint: "jaeger:4317"
     tls:
       insecure: true
-      
+
   # Also print to stdout for debugging
   logging:
     verbosity: detailed

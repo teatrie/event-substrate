@@ -36,40 +36,40 @@ graph TD
     end
 
     %% ── Download edges ────────────────────────────────────────────────────────
-    WebUI -->|"POST /api/v1/media/download-intent (JWT)"| API
-    API -->|"202 Accepted + request_id"| WebUI
-    API -->|"produce DownloadIntent"| DI_Topic
+    WebUI -->|POST /api/v1/media/download-intent| API
+    API -->|202 Accepted + request_id| WebUI
+    API -->|produce DownloadIntent| DI_Topic
     DI_Topic -->|consume| MediaService
-    MediaService -->|"query ownership\n(status = active)"| MediaFiles
+    MediaService -->|query ownership\nstatus = active| MediaFiles
     MediaFiles -->|found| MediaService
-    MediaService -->|"generate presigned GET URL\nproduce FileDownloadUrlSigned"| DS_Topic
+    MediaService -->|generate presigned GET URL\nproduce FileDownloadUrlSigned| DS_Topic
     MediaFiles -->|not found| MediaService
-    MediaService -->|"produce FileDownloadRejected"| DR_Topic
+    MediaService -->|produce FileDownloadRejected| DR_Topic
     DS_Topic -->|consume| FlinkMediaNotifs
     DR_Topic -->|consume| FlinkMediaNotifs
-    FlinkMediaNotifs -->|"media.download_ready\nor media.download_rejected"| UserNotifs
+    FlinkMediaNotifs -->|media.download_ready\nor media.download_rejected| UserNotifs
     UserNotifs -->|notify| SupabaseRT_D
-    SupabaseRT_D -->|"receive presigned URL"| WebUI
-    WebUI -->|"GET presigned URL"| MediaBucket
+    SupabaseRT_D -->|receive presigned URL| WebUI
+    WebUI -->|GET presigned URL| MediaBucket
 
     %% ── Delete edges ──────────────────────────────────────────────────────────
-    WebUI -->|"POST /api/v1/media/delete-intent (JWT)"| API
-    API -->|"202 Accepted + request_id"| WebUI
-    API -->|"produce DeleteIntent"| DEI_Topic
+    WebUI -->|POST /api/v1/media/delete-intent| API
+    API -->|202 Accepted + request_id| WebUI
+    API -->|produce DeleteIntent| DEI_Topic
     DEI_Topic -->|consume| MediaService
-    MediaService -->|"verify ownership"| MediaFiles
+    MediaService -->|verify ownership| MediaFiles
     MediaFiles -->|found| MediaService
-    MediaService -->|"1. soft-delete row\n(UPDATE status='deleted')"| MediaFiles
-    MediaService -->|"2. produce FileDeleted"| DE_Topic
-    MediaService -->|"3. remove object\n(best-effort)"| MediaBucket
-    MediaBucket -->|"RemoveObject fails"| MediaService
-    MediaService -->|"produce FileDeleteRetry\n(retry_count=0)"| DERetry_Topic
-    DERetry_Topic -->|"consume\n(DeleteRetryHandler)"| MediaService
-    MediaService -->|"retry_count >= 3\nproduce FileDeleteDeadLetter"| DEDLQ_Topic
-    MediaFiles -->|"not found / error"| MediaService
-    MediaService -->|"produce FileDeleteRejected"| DER_Topic
+    MediaService -->|1. soft-delete row\nUPDATE status=deleted| MediaFiles
+    MediaService -->|2. produce FileDeleted| DE_Topic
+    MediaService -->|3. remove object\nbest-effort| MediaBucket
+    MediaBucket -->|RemoveObject fails| MediaService
+    MediaService -->|produce FileDeleteRetry\nretry_count=0| DERetry_Topic
+    DERetry_Topic -->|consume\nDeleteRetryHandler| MediaService
+    MediaService -->|retry_count >= 3\nproduce FileDeleteDeadLetter| DEDLQ_Topic
+    MediaFiles -->|not found / error| MediaService
+    MediaService -->|produce FileDeleteRejected| DER_Topic
     DE_Topic -->|consume| FlinkMediaNotifs
     DER_Topic -->|consume| FlinkMediaNotifs
-    FlinkMediaNotifs -->|"media.file_deleted\nor media.delete_rejected"| UserNotifs
+    FlinkMediaNotifs -->|media.file_deleted\nor media.delete_rejected| UserNotifs
     UserNotifs -->|notify| SupabaseRT_Del
-    SupabaseRT_Del -->|"deletion confirmed\n(RLS filters status='active')"| WebUI
+    SupabaseRT_Del -->|deletion confirmed\nRLS filters status=active| WebUI
