@@ -253,8 +253,8 @@ test.describe('Home view (authenticated)', () => {
         })
         expect(mainJs).toContain('btn-download')
         expect(mainJs).toContain('btn-delete')
-        expect(mainJs).toContain('requestDownloadUrl')
-        expect(mainJs).toContain('deleteFile')
+        expect(mainJs).toContain('requestDownloadIntent')
+        expect(mainJs).toContain('requestDeleteIntent')
     })
 
     test('delete confirmation modal exists and is hidden by default', async ({ page }) => {
