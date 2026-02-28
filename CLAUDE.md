@@ -3,12 +3,14 @@
 Event-driven microservices platform. See [README.md](./README.md) for architecture overview, [architecture.md](./docs/architecture.md) for data flow, [learnings.md](./docs/learnings.md) for gotchas, [productionization.md](./docs/productionization.md) for cloud deployment, [github_cicd_plan.md](./docs/github_cicd_plan.md) for CI/CD, [data_governance_plan.md](./docs/data_governance_plan.md) for governance, and [data_processing_plan.md](./docs/data_processing_plan.md) for Spark/Airflow.
 
 Service-specific conventions live in each sub-folder's `AGENT.md`:
+
 - `go-services/AGENT.md` — Go, Docker, media endpoints, credit economy
 - `flink_jobs/AGENT.md` — Flink SQL, sql_runner.py, JAAS
 - `frontend/AGENT.md` — Vite, vitest, Playwright, media UI
 - `supabase/AGENT.md` — migrations, RLS, Realtime, event types
 
 Custom skills live in `.claude/skills/<name>/SKILL.md`:
+
 - `/tdd-execute` — Red-Green-Refactor subagent loop (co-locates `tdd-protocol.md`)
 - `/feature-epic` — multi-domain feature decomposition + sequential TDD
 - `/agent-team` — cost-effective multi-agent orchestration with model selection
@@ -33,7 +35,10 @@ This platform is organized around explicit domain ownership. Violating these bou
 
 **Avro schemas:** Live in `avro/` with directory paths mapping to Kafka topic names (e.g., `avro/public/identity/login.events.avsc` → topic `public.identity.login.events`). Renaming topics requires re-registering schemas under the new `<topic>-value` subject.
 
+**Linting & Code Quality:** Every domain has static analysis configured. Run `task lint` (all domains) or individual `task lint:{go,python,frontend,sql,yaml,k8s,markdown,mermaid}`. Auto-fix with `task lint:fix`. Type checking via `task check:types` (Python/mypy). Security scanning via `task check:security` (ruff S rules + npm audit + gosec). Composite `task check` runs lint + type-check. Tools: golangci-lint (Go), ruff (Python), ESLint (Frontend), sqlfluff (SQL), yamllint (YAML), kubeconform (K8s), markdownlint-cli2 (Markdown), @probelabs/maid (Mermaid). TDD protocol enforces lint as a GREEN phase exit criterion.
+
 ## Deployment Checklist
+
 1. **Go changes:** `task build:consumer` or `task build:gateway` → `task helm:install` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
 2. **Flink SQL changes:** `task k8s:configmaps` → delete + re-apply FlinkDeployment.
 3. **Migration changes:** `supabase db reset`
@@ -47,7 +52,8 @@ This platform is organized around explicit domain ownership. Violating these bou
 11. **Persistent failures:** `task purge && task init`
 
 ## Key Knowledge
+
 - **TDD Workflow:** Use `/tdd-execute` for new endpoints, functions, bug fixes with reproducible failures. Use `/feature-epic` for multi-domain features (breaks into domains, runs TDD per domain). Add `/agent-team` to either for cost-effective model selection and escalation. Skip TDD for config/YAML, migrations, docs, one-line fixes.
 - **Testing:** E2E tests in `tests/e2e/` are mandatory for every feature. Plan them explicitly in Phase 1 of `/feature-epic`. Run `task start` then `task test:e2e` after pipeline changes.
-- **Architecture Diagram:** Update diagrams in `docs/architecture/` and regenerate SVGs (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes. Overview: `docs/architecture/overview.mmd`. Detail diagrams: `media-upload-saga.mmd`, `media-download-delete.mmd`, `identity-messaging.mmd`, `analytics.mmd`.
+- **Architecture Diagram:** Update diagrams in `docs/architecture/` and regenerate SVGs (run `/mermaid-to-svg`) after any topology change. Mandatory alongside code changes. Overview: `docs/architecture/overview.mmd`. Detail diagrams: `media-upload-saga.mmd`, `media-download-delete.mmd`, `identity-messaging.mmd`, `analytics.mmd`. Mermaid syntax must pass `task lint:mermaid` — no quotes in edge labels `-->|text|`, no quotes in cylinder labels `[(text)]`, avoid parentheses inside edge labels.
 - **Documentation:** After any change, update all affected docs: `README.md`, `docs/architecture.md`, `docs/architecture/*.mmd`, `AGENT.md`, `docs/learnings.md`, `docs/productionization.md`, `docs/github_cicd_plan.md`, `docs/data_governance_plan.md`, and `docs/data_processing_plan.md`.

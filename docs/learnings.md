@@ -1,38 +1,49 @@
 # Project Learnings & Architectural Decisions
 
-This document captures the hard-won wisdom, "gotchas," and strategic decisions made during the development of **The Event-Driven Substrate**. 
+This document captures the hard-won wisdom, "gotchas," and strategic decisions made during the development of **The Event-Driven Substrate**.
 
 ---
 
 ## 🛠️ Infrastructure & Local Development
 
 ### 1. High-Performance Local Mirroring
+
 **Observation:** Running a full production-grade stack (Redpanda, Flink, ClickHouse, OTel, Spark) on a local machine requires significant resource efficiency.
 **Decision:** Standardized on **OrbStack** for Apple Silicon. Its native virtualization layer handle the Redpanda tiered storage (S3/MinIO) and Kubernetes management with significantly lower overhead than traditional local Docker Desktop solutions.
 
 ### 2. Helm Adoption: Migrating from kubectl to Helm
+
 **Observation:** When Go services were originally deployed via `kubectl apply -f kubernetes/go-services/`, the resulting K8s resources lack Helm ownership metadata. Switching to `helm upgrade --install` fails with `invalid ownership metadata; label validation error: missing key "app.kubernetes.io/managed-by"` because Helm refuses to adopt resources it didn't create.
 **Decision:** Added an idempotent resource adoption step in the `helm:install` task that annotates and labels existing resources with `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`, and `app.kubernetes.io/managed-by=Helm` before running `helm upgrade --install`. This is a one-time migration — once Helm owns the resources, subsequent installs work cleanly.
 
 ### 3. Spark Docker Split: Base + Per-App Layers
+
 **Observation:** A monolithic Spark Dockerfile that bundles the runtime, JARs, common code, and all app code forces a full rebuild whenever any single app changes. As the number of Spark jobs grows, this becomes wasteful.
 **Decision:** Split into `Dockerfile.spark.base` (Spark 4.0.2 + JARs + pip deps + `common/`) and per-app thin Dockerfiles (e.g., `pyspark_apps/identity/daily_login_aggregates/Dockerfile`) that `FROM spark-base:latest`. Base image only rebuilds when JARs, common code, or dependencies change. Per-app images rebuild in seconds since they only COPY the app code.
+
+### 4. Airflow 3.x Scheduler OOMKilled at Default Memory Limits
+
+**Observation:** Airflow 3.x's scheduler consumes significantly more memory than 2.x. With a 512Mi memory limit, the scheduler is OOMKilled during startup — especially on a loaded system running Flink, Redpanda, Spark, and OTel concurrently. The default Helm startup probe (20s timeout) also times out before the scheduler can initialize, compounding the issue into a crash loop.
+**Decision:** Bumped scheduler memory limit from 512Mi to 1Gi and CPU limit from 300m to 500m in `airflow/values-local.yaml`. Added an explicit startup probe with 30s timeout and 30 retries (300s total window). The triggerer can be slow to start under load but doesn't affect DAG execution — only deferrable operators need it.
 
 ---
 
 ## 🏗️ Architecture & Data Flow
 
 ### 1. Real-time Race Conditions (Flink vs. WebSockets)
+
 **Observation:** Flink processes data at sub-millisecond speeds. In a local environment, an event can often traverse the entire pipeline and be inserted back into the database *before* a client's frontend (Vite/Supabase-js) has successfully established its WebSocket subscription following a login.
 **Decision:** Implemented a **REST-prefetch fallback** strategy. The client concurrently fetches historical state while connecting to the stream to ensure no events are missed during the "socket negotiation" window.
 
 ## 🔄 Pipeline Stabilization & Realtime Data
 
 ### 1. Supabase REPLICA IDENTITY FULL
+
 **Observation:** Supabase Realtime streams Postgres changes over WebSockets, but for UPDATEs and DELETEs, it often drops the full row payload (sending only the primary key).
 **Decision:** We learned to explicitly configure `ALTER TABLE ... REPLICA IDENTITY FULL;` in our SQL migrations. Without this, downstream edge clients utilizing the Realtime subscriptions fail to retrieve the complete data map when records are modified.
 
 ### 2. Unified Notification Channel
+
 **Observation:** We encountered a "phantom data loss" bug where backend Flink pipelines were perfectly materializing views back into Postgres, but the UI wasn't updating. The root cause was the frontend subscribing to individual domain tables that were out of sync with the backend.
 **Decision:** Consolidated all event egress into a single `user_notifications` table. The frontend subscribes to one Supabase Realtime channel on this table, parsing `event_type` and `payload` to render notifications. This eliminates the need to add new subscriptions when new event types are introduced.
 
@@ -41,18 +52,22 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 🌊 Streaming Reliability & Schemas
 
 ### 1. Aggressive Consumer Crashing (Data Loss Prevention)
+
 **Observation:** Inside Go Kafka consumers, if a downstream execution (like a Postgres `INSERT`) fails, handling the error gracefully and `return`ing out of the function allows the Kafka offset to advance. This functionally creates silent, permanent message loss across the pipeline.
 **Decision:** We adopted an aggressive failure philosophy. We now use `log.Fatalf()` to deliberately crash the individual consumer pod if an Egress operation fails. This prevents the offset from committing, ensuring the message is retried indefinitely upon Kubernetes pod respawn (acting as a strict Dead-Letter queue forcing manual intervention rather than data loss).
 
 ### 2. Avro Schema Registration Contexts
+
 **Observation:** When iteratively renaming Kafka topics (e.g., `LoginEvent` to `public.identity.login.events`), simply updating producer/consumer config strings and cluster topics is insufficient.
 **Decision:** You must explicitly `POST` and re-register the `.avsc` schema files under the exact new topic namespace (`<new_topic_name>-value`) to the Confluent Schema Registry. Flink consumer mapping pods will otherwise suffer 'Subject not found' timeouts and completely break pipeline mappings until both the registry and the pods are cleared.
 
 ### 3. Iceberg Catalog Requires Hadoop on Classpath
+
 **Observation:** Registering an Iceberg REST catalog (`CREATE CATALOG iceberg_catalog WITH ('type' = 'iceberg', ...)`) in Flink 1.18 fails with `ClassNotFoundException: org.apache.hadoop.conf.Configuration` even when `iceberg-flink-runtime-1.18-1.5.0.jar` is on the classpath.
 **Decision:** The Iceberg Flink runtime depends on `hadoop-common` for configuration handling. Since the core notification pipeline doesn't need Iceberg (it's for querying tiered storage), the catalog registration is wrapped in a try/except and treated as non-fatal. To fully enable it, add `hadoop-common-3.3.6.jar` to the Flink `usrlib/` directory.
 
 ### 4. Deleting Supabase Migrations Requires DB Reset
+
 **Observation:** When migration files that were already applied are deleted from `supabase/migrations/`, the migration history in the database becomes out of sync. Subsequent migrations may not apply, and tables created by deleted migrations persist as orphans.
 **Decision:** After deleting applied migration files, always run `supabase db reset` to re-apply the remaining migrations from scratch. This ensures the database schema matches the migration directory exactly.
 
@@ -61,14 +76,17 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 🐳 DevOps & Environment Recovery
 
 ### 1. Idempotent Startup Scripts
+
 **Observation:** Because our local Docker volumes (ClickHouse MVs, Kafka Engine tables) are occasionally pruned or subject to ephemeral desyncs during development.
 **Decision:** Initialization actions (like `clickhouse-client -n < clickhouse/init.sql`) must be baked into the everyday `./start.sh` boot script, rather than isolating them to a one-time `./init.sh` setup script. This guarantees the entire environment Recovers and re-asserts its state completely if containers are recreated.
 
 ### 2. Task `sources:` Is for Build Artifacts, Not Infrastructure State
+
 **Observation:** Task's `sources:` change-detection is designed for build artifacts ("recompile if source changed"). Using it on infrastructure state tasks (schema registration, topic creation) causes silent skips when containers are rebuilt but config files haven't changed — the Schema Registry is empty but Task reports "up to date."
 **Decision:** Removed `sources:` from `schemas:register` and `topics:create`. These are idempotent reconciliation tasks (~2s each) that must always run to assert external state. Build tasks (`build:gateway`, `build:consumer`) still use `sources:` because they track local artifacts, not external system state. The `start` task now includes both schema and topic reconciliation.
 
 ### 3. Dockerfile Build Context Must Track All Source Files
+
 **Observation:** Hardcoding individual filenames in Dockerfiles (e.g., `COPY main.go ./`) causes build failures when new source files are added. The error only surfaces at Docker build time — local builds succeed because the compiler sees all files in the directory.
 **Decision:** Use glob patterns (`COPY *.go ./`, `COPY src/ ./src/`) in Dockerfiles. When adding any new source file to a service, verify its Dockerfile copies it into the build context.
 
@@ -83,34 +101,42 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 🔐 Kafka Authentication (SASL/SCRAM)
 
 ### 1. Redpanda `enable_sasl` Is a Cluster Property, Not a Node Property
+
 **Observation:** Setting `--set redpanda.enable_sasl=true` in the `rpk redpanda start` command flags writes to the node config (`redpanda.yaml`), but SASL enforcement is a *cluster* property. The cluster config remains `enable_sasl=false` unless set via the bootstrap file or Admin API.
 **Decision:** Set `enable_sasl: true` and `superusers` in `redpanda-bootstrap.yaml` (applied at cluster formation). This ensures SASL is enforced from first boot. If changing after cluster creation, use Admin API: `rpk cluster config set enable_sasl true`.
 
 ### 2. Schema Registry Needs Topic Create + Alter ACLs
+
 **Observation:** Schema Registry creates the `_schemas` topic on first startup. The initial ACL set (Read/Write/Describe) was insufficient — it also needs `Create` and `Alter` permissions on `_schemas` to bootstrap the topic with the correct configuration.
 **Decision:** Grant `Create` and `Alter` alongside Read/Write/Describe for the `schema-admin` identity on the `_schemas` topic.
 
 ### 3. SCRAM Credentials Need Propagation Time
+
 **Observation:** After creating SASL users via the Admin API, the credentials are not immediately available for Kafka protocol authentication. Attempting ACL creation (which authenticates as `superuser` via Kafka protocol) immediately after user creation fails with `ILLEGAL_SASL_STATE`.
 **Decision:** Added a retry loop (`rpk cluster info --user superuser ...`) between user creation and ACL setup to wait for credential propagation.
 
 ### 4. Flink Kafka Connector Uses Shaded Class Names
+
 **Observation:** The Flink SQL Kafka connector (`flink-sql-connector-kafka-3.0.1-1.18.jar`) shades all Kafka client classes under `org.apache.flink.kafka.shaded.*`. Using the original `org.apache.kafka.common.security.scram.ScramLoginModule` in JAAS config fails with `No LoginModule found`.
 **Decision:** Use the shaded path: `org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule`.
 
 ### 5. JAAS Semicolons Conflict with SQL Statement Splitting
+
 **Observation:** `sql_runner.py` splits SQL files on `;` to execute individual statements. JAAS config strings contain `;` (e.g., `...password="pw";`) which gets mis-split, breaking CREATE TABLE statements.
 **Decision:** Moved all Kafka table registrations (sources AND sinks) into `sql_runner.py` Python code. SQL files now only contain INSERT logic. This avoids the `;` conflict entirely.
 
 ### 6. ClickHouse Kafka SASL Uses Server Config, Not Table Settings
+
 **Observation:** ClickHouse 24.3's Kafka engine does not support `kafka_security_protocol` or `kafka_sasl_*` settings inline in `CREATE TABLE ... SETTINGS`. Attempting this fails with `Unknown setting`.
 **Decision:** SASL config goes in a server config XML file (`clickhouse/kafka-sasl.xml`) mounted at `/etc/clickhouse-server/config.d/`, which applies to all Kafka engine tables globally.
 
 ### 7. Viper `AutomaticEnv()` Requires Key Registration
+
 **Observation:** `viper.AutomaticEnv()` only binds env vars for keys that viper already knows about (via `SetDefault`, `BindEnv`, or config files). New Config struct fields with `mapstructure` tags but no corresponding `SetDefault()` silently remain empty.
 **Decision:** Always add `viper.SetDefault("KEY", "")` for every Config struct field, even if the default is empty string.
 
 ### 8. RLS Must Scope Message Visibility — Not Just Event Type
+
 **Observation:** The original RLS policy `USING (auth.uid()::text = user_id OR event_type = 'user.message')` made ALL messages visible to ALL authenticated users. This caused E2E test messages (e.g., `e2e-test-*` from `test-*@e2e-test.local` users) to leak into real users' Live Events feeds.
 **Decision:** Added `visibility` (`broadcast` | `direct`) and `recipient_id` columns to `user_notifications`. The RLS policy now has three clauses: own events, broadcast messages, or direct messages where `recipient_id = auth.uid()`. E2E tests send with `visibility: 'direct'` targeting the test user, so they never pollute the broadcast feed. The Avro schema uses a default of `"broadcast"` for backward compatibility.
 
@@ -119,47 +145,59 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 📁 Media Upload & Credit Economy
 
 ### 1. MinIO Webhook Event Format Requires Transformation
+
 **Observation:** MinIO S3 event notifications use a nested JSON structure (`Records[].s3.bucket.name`, `Records[].s3.object.key`, etc.) that doesn't directly map to our Avro schemas. The event also includes URL-encoded keys and metadata in custom headers (`x-amz-meta-*`).
 **Decision:** Built dedicated webhook handlers in the media-service (`upload_webhook_handler.go`, `file_ready_webhook_handler.go`) that extract and transform the MinIO event format into flat Avro-compatible structures before producing to Kafka. This keeps downstream processors simple — they read clean, pre-normalized events.
 
 ### 2. Append-Only Credit Ledger Over Mutable Balance Column
+
 **Observation:** A mutable `balance` column on a `user_credits` table would require UPDATE operations, which conflict with Flink JDBC sinks (append-only, no PRIMARY KEY for pure INSERT). It also loses the audit trail of individual credit transactions.
 **Decision:** Used an append-only `credit_ledger` table where each row is a signed delta (`+2` for signup, `-1` for upload). A `user_credit_balances` view aggregates `SUM(amount)` grouped by `user_id`. This fits Flink's INSERT-only model, provides a full audit trail, and enables future credit analytics.
 
 ### 3. Credit Deduction at Intent Time with TTL Refund (Upload Saga)
+
 **Observation:** The original design deducted credits on upload completion (MinIO webhook). This left a race window and didn't charge for abandoned uploads. The Upload Saga inverts this: credits are deducted atomically at intent time via PyFlink's conditional SQL (`INSERT ... WHERE balance >= 1`).
 **Decision:** Deduct at intent, refund on expiry. The `credit_check_processor.py` atomically checks and deducts in a single SQL query (no race window). If the upload doesn't complete within 15 minutes, the `ttl_expiry_processor.py` emits `FileUploadExpired`, and `credit_balance_processor.sql` refunds +1 credit. This ensures users are never permanently charged for failed uploads while eliminating the multi-URL race condition.
 
 ### 3b. TTL Processor Keys by file_path, Not request_id
+
 **Observation:** The `upload.signed` event has `request_id` but `upload.received` (MinIO webhook) does not — there's no way to correlate them by request. Both events share `file_path`.
 **Decision:** The TTL processor keys its dual-stream `KeyedCoProcessFunction` by `file_path`. This correctly correlates signed URLs with their upload receipts. Trade-off: if the same file_path is re-signed (e.g., on retry), the second signed event overwrites state and resets the timer.
 
 ### 3c. FileUploadExpired Schema Gap: file_size and media_type
+
 **Observation:** The `FileUploadExpired` Avro schema requires `file_size` and `media_type`, but `upload.signed` (the TTL processor's primary input) doesn't carry them — they live on `upload.approved`.
 **Decision:** Default to `0` and `""` for now. Downstream consumers (credit refund, expired cleanup, notifications) don't depend on these fields for correctness. A future enhancement could add `upload.approved` as a third input stream to the TTL processor.
 
 ### 3d. Remove Old Deduction Paths When Adding a Saga
+
 **Observation:** After implementing the Upload Saga (credit deduction at intent time in `credit_check_processor.py`), the old Flink SQL deduction in `credit_balance_processor.sql` was left in place. Both paths converge on `public.media.upload.events` when the file lands in MinIO, causing a double deduction: -1 at intent approval AND -1 at file arrival. The Flink SQL processor has no way to distinguish saga uploads from legacy uploads.
 **Decision:** When moving a side effect (like credit deduction) from a downstream processor to an upstream saga, always remove the downstream logic completely. Credit deduction must happen at exactly one point — the authorization boundary. The `credit_balance_processor.sql` now only creates `media_files` rows and handles expired-upload refunds; all upload credit logic lives in the saga.
 
 ### 4. CORS Required for Browser-Direct Presigned URL Uploads
+
 **Observation:** When the browser uploads directly to MinIO/GCS via a presigned PUT URL, the request is cross-origin (different port/domain than the frontend). Without CORS headers on the storage bucket, the browser blocks the upload with an opaque network error.
 **Decision:** Configured CORS on the MinIO `media-uploads` bucket via `scripts/minio-init.sh` (`mc anonymous set-json`). In production, the GCS bucket CORS config must restrict `AllowedOrigins` to the production frontend domain(s) rather than `*`.
 
 ### 5. Presigned URLs Decouple Upload Size from API Gateway Memory
+
 **Observation:** Proxying file uploads through the API Gateway would require buffering the entire file in memory (or streaming with backpressure), increasing memory footprint and latency linearly with file size.
 **Decision:** The Claim Check pattern sends only metadata through the event pipeline. The browser uploads directly to object storage via presigned PUT URLs. The API Gateway never sees the file bytes — it only validates auth, checks credits, and signs the URL. This keeps the Gateway stateless and lightweight regardless of upload size.
 
 ### 6. S3v4 Presigned URLs Cannot Have Their Host Rewritten
+
 **Observation:** S3v4 presigned URLs include the `Host` header in the canonical request that's hashed into the signature. If you rewrite `host.docker.internal:9000` → `localhost:9000` in the URL, the browser sends `Host: localhost:9000`, which doesn't match the signed host, and MinIO returns `SignatureDoesNotMatch` (403).
 **Decision:** Never rewrite the host portion of a presigned URL. Instead, ensure the client can resolve the original hostname. In E2E tests, use Node's `http.request` API (not `fetch`) to connect to `127.0.0.1` while explicitly sending the original `Host: host.docker.internal:9000` header. Node's `fetch` (undici) silently strips custom `Host` headers for security — only `http.request` preserves them.
 
 ### 7. MinIO Sends URL-Encoded Object Keys in Webhook Events
+
 **Observation:** MinIO S3 event notifications URL-encode the object key — forward slashes become `%2F` (e.g., `uploads%2F{user_id}%2F{uuid}%2Fimage.png`). Splitting on `/` without decoding first yields a single segment, causing path parsing to skip the record as non-matching.
 **Decision:** Always `url.QueryUnescape` the `Records[].s3.object.key` field before parsing the path structure. This is not documented in MinIO's webhook documentation and only surfaces when keys contain path separators.
 
 ### 8. JSON Number Type Coercion Breaks Avro `long` Fields — Full Fix Chain
+
 **Observation:** Go's `encoding/json` package has three levels of numeric handling, each insufficient on its own for Avro:
+
 1. `json.Unmarshal` into `map[string]any` → all numbers become `float64` → Avro rejects with "float64 is unsupported for Avro long"
 2. `json.NewDecoder().UseNumber()` into `map[string]any` → numbers become `json.Number` (string type) → Avro rejects with "json.Number is unsupported for Avro long"
 3. Both are needed: `UseNumber()` preserves the exact representation, then a custom `convertJSONNumbers()` walker converts `json.Number` → `int64` (via `.Int64()`) or `float64` (via `.Float64()`) for native Go types that hamba/avro accepts.
@@ -167,14 +205,17 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 **Decision:** In `processAndProduceEvent` (the shared entry point for ALL event production), use `json.NewDecoder().UseNumber()` for deserialization, then call `convertJSONNumbers(event)` to recursively convert `json.Number` values to native `int64`/`float64` before Avro encoding. This fix benefits all topics with numeric Avro fields, not just media uploads.
 
 ### 9. MinIO Webhook Auth Requires Version-Specific Configuration
+
 **Observation:** MinIO's `mc admin config set notify_webhook:<name> auth_token=...` parameter exists in documentation but is not supported in all MinIO versions. The config silently ignores the `auth_token` field, causing webhooks to arrive without any authentication header.
 **Decision:** Do not rely on `auth_token` for MinIO webhook authentication in local dev. Instead, authenticate MinIO's webhook endpoint by network isolation (the endpoint is only reachable from within the Docker/K8s network). Add a `TODO(prod)` for IP allowlisting or mutual TLS in production. Always check `mc admin config get` output to verify which fields are actually persisted.
 
 ### 10. MinIO Webhook Setup Is Infrastructure State, Not Build State
+
 **Observation:** MinIO's webhook notification configuration (target endpoint, event subscriptions) is stored in MinIO's internal state, not in config files. Restarting the MinIO container preserves the config, but re-creating the container (via `docker compose down`/`up` or volume pruning) loses it. Unlike Redpanda topics/schemas, there's no `sources:` fingerprinting — the webhook must be re-applied.
 **Decision:** The `scripts/setup-minio-webhook.sh` script must be included in the `task start` startup sequence, similar to `schemas:register` and `topics:create`. It is idempotent (re-applies are safe) and should always run to reconcile state. The `AGENT.md` deployment checklist calls this out explicitly.
 
 ### 11. MinIO Event Queue Persists Failed Deliveries Across Restarts
+
 **Observation:** When a MinIO webhook returns a non-2xx status, MinIO enqueues the event for retry (every ~3 seconds). This queue persists across container restarts and even survives deletion of the original object. A single failed webhook can generate thousands of retry attempts, dominating service logs and potentially blocking new event deliveries via queue saturation.
 **Decision:** When debugging MinIO webhook issues: (1) always check media-service logs for the actual user ID — if you see the SAME user retrying, it's a stale event, not a new upload; (2) restart MinIO AND re-run `setup-minio-webhook.sh` to clear the retry queue; (3) clear stale objects with `mc rm --recursive --force` before re-testing. The webhook handlers in media-service return proper HTTP status codes to MinIO, so successful events get acknowledged immediately (200) while failures get retried (400+).
 
@@ -309,26 +350,32 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 🔍 Observability & Instrumentation
 
 ### 1. zerolog `var log` Shadows stdlib `log` Package — Intentional
+
 **Observation:** Each Go service declares `var log = zerolog.New(...).With().Timestamp().Logger()` at the package level, shadowing the stdlib `log` package.
 **Decision:** This is intentional and allows gradual migration. Existing code using `log.Printf()` still works (referring to stdlib), while new code uses the structured logger. Eventually all calls migrate to `log.Info()` / `log.Error()`, and the shadowing becomes complete. No need to refactor the entire codebase at once.
 
 ### 2. `OTEL_EXPORTER_OTLP_ENDPOINT` Is Auto-Read By OTel SDK
+
 **Observation:** The OTel SDK checks for `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable automatically during initialization.
 **Decision:** No custom parsing needed in `initOTel()`. The SDK reads the env var and configures the OTLP gRPC exporter endpoint. Default: `http://host.docker.internal:4317`.
 
 ### 3. message-consumer HTTP Listener on Port 8091 for K8s Probes
+
 **Observation:** The message-consumer had no HTTP server before observability — it was a pure Kafka consumer. Adding K8s health probes required exposing `/healthz` and `/readyz`.
 **Decision:** Added a second HTTP listener on port 8091 alongside the Kafka consumer, specifically for health checks. This keeps the Kafka consumer logic isolated and allows K8s to monitor readiness independently. The health check validates Kafka connectivity, so the pod is automatically restarted if the broker becomes unreachable.
 
 ### 4. Redpanda `/public_metrics` Requires Admin API Port (9644), Not Kafka Port
+
 **Observation:** When adding Prometheus scrape targets, attempts to scrape Redpanda metrics on port 9092 (Kafka port) failed.
 **Decision:** Redpanda exposes Prometheus metrics at port 9644 (admin API port), path `/public_metrics`. This is separate from the Kafka broker port. Prometheus scrape config must target `host.docker.internal:9644/public_metrics`.
 
 ### 5. MinIO Metrics Require `MINIO_PROMETHEUS_AUTH_TYPE=public` Environment Variable
+
 **Observation:** MinIO metrics endpoint (`/minio/v2/metrics/cluster`) returns 401 Unauthorized by default.
 **Decision:** Set `MINIO_PROMETHEUS_AUTH_TYPE=public` in the MinIO container environment to enable unauthenticated metrics access. In production, replace with proper auth (bearer token, TLS client cert) before exposing metrics to untrusted networks.
 
 ### 6. Health Checks Must Validate Downstream Dependencies
+
 **Observation:** A service returning 200 OK from `/readyz` when Kafka is down causes the pod to remain in the load balancer and fail requests, degrading user experience.
 **Decision:** The readiness probe validates actual dependency connectivity: check Kafka broker (via test produce/consume), check Postgres connection pool (SELECT 1). Return 503 if any check fails. K8s removes the pod from the load balancer immediately, preventing cascading failures.
 
@@ -337,30 +384,37 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## ⚙️ Batch Processing & Orchestration (Spark + Airflow)
 
 ### 1. macOS AirPlay Receiver Blocks Port 5000
+
 **Observation:** macOS Monterey+ runs AirPlay Receiver on port 5000. Any service bound to `localhost:5000` via Docker port mapping is intercepted by Apple's AirTunes — `curl` returns a 403 with `Server: AirTunes/870.14.1` instead of reaching the container.
 **Decision:** Moved Marquez API from port 5000 to 5050 (admin from 5001 to 5051). When choosing ports for new services, avoid 5000 and 7000 (macOS AirPlay and Screen Sharing defaults). Always test with `curl -v` to check the `Server` header when a service appears unresponsive.
 
 ### 2. Airflow 3.x Helm Chart: `apiServer` Replaces `webserver`
+
 **Observation:** The Airflow Helm chart 1.19.0 (Airflow 3.x) renames the web-facing component from `webserver` to `apiServer`. Putting resource limits, startup probes, and other config under the `webserver:` key in `values.yaml` is silently ignored — the api-server pod runs with no resource limits, leading to OOMKills under memory pressure.
 **Decision:** Resource limits, probes, and service config go under `apiServer:` in Helm values. The `webserver.defaultUser` key is still read by the `createUserJob` template for backward compatibility, so keep it for user creation. The service name also changed: `svc/airflow-webserver` → `svc/airflow-api-server`. The `workers` config moved from `[webserver]` to `[api]` section.
 
 ### 3. Airflow 3.x Provider Module Renames
+
 **Observation:** The CNCF Kubernetes provider v10.x (bundled with Airflow 3.x) renamed `airflow.providers.cncf.kubernetes.operators.kubernetes_pod` to `airflow.providers.cncf.kubernetes.operators.pod`. The old import path causes a DAG parse error (0 DAGs, 1 error) that only appears in the dag-processor stats table — no traceback in the main log.
 **Decision:** When upgrading Airflow major versions, check all DAG imports against the installed provider versions. Use `kubectl exec` to test imports directly inside the dag-processor pod. DAG parse errors in 3.x appear in the stats table (`# Errors` column), not as tracebacks in stdout.
 
 ### 4. KubernetesPodOperator Cross-Namespace RBAC
+
 **Observation:** Airflow's `KubernetesPodOperator` runs task pods in a target namespace (e.g., `spark-apps`), but the Airflow worker pod runs in the `airflow` namespace. The worker's service account (`airflow-worker`) needs explicit RBAC (Role + RoleBinding) in the target namespace to create, list, and delete pods. Without it, the task fails with `403 Forbidden: pods is forbidden`.
 **Decision:** Create a Role with `pods`, `pods/log`, `pods/status` and `events` permissions in the target namespace, bound to the `airflow-worker` ServiceAccount in the `airflow` namespace. This is a one-time setup per target namespace.
 
 ### 5. Marquez Requires Mounted Config File
+
 **Observation:** Setting `MARQUEZ_CONFIG=/etc/marquez/config.yml` in docker-compose without mounting a file at that path causes Marquez to crash with `FileNotFoundException`. The built-in default config at `marquez.dev.yml` hardcodes `postgres` as the DB hostname, which doesn't match a custom service name like `marquez-db`.
 **Decision:** Mount a custom `config.yml` into the container with env-var-templated DB connection settings (`${POSTGRES_HOST:-marquez-db}`). This keeps the docker-compose service naming flexible while satisfying the config requirement.
 
 ### 6. KubernetesPodOperator Log Retrieval After Pod Deletion
+
 **Observation:** With `is_delete_operator_pod=True`, the task pod is cleaned up after execution. Airflow then tries to fetch logs from the deleted pod's hostname, resulting in `NameResolutionError`. The actual task logs were streamed during execution (`get_logs=True`) but aren't persisted after pod deletion.
 **Decision:** This is expected behavior for local dev. In production, configure remote logging (S3/GCS) in Airflow so task logs survive pod deletion. The `get_logs=True` setting streams logs to Airflow's task log during execution — they're visible in the UI while the task runs, just not after the pod is gone.
 
 ### 7. Spark Docker Image PYTHONPATH for PySpark + py4j
+
 **Observation:** The `apache/spark:4.0.2-python3` image bundles PySpark at `/opt/spark/python` and py4j as a zip at `/opt/spark/python/lib/py4j-0.10.9.9-src.zip`. The default Spark entrypoint (`/opt/entrypoint.sh`) sets PYTHONPATH, but clearing the entrypoint (needed for running pytest directly) loses this setup. Without both paths, imports fail with `No module named pyspark` or `No module named py4j`.
 **Decision:** In the Dockerfile test stage, set `ENV PYTHONPATH="/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip"` explicitly and use `ENTRYPOINT []` + `CMD ["python3", "-m", "pytest", ...]`. Don't append `${PYTHONPATH}` — it's undefined in the base image and Docker emits a warning.
 
@@ -369,17 +423,52 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 ## 📊 Telemetry Configuration
 
 ### 1. Airflow 3.x OTel Metrics Use `_total` Suffix on Counters
+
 **Observation:** Airflow 3.x ships with built-in OpenTelemetry support. When exporting metrics via OTLP, all counter metrics follow the OpenTelemetry naming convention and append `_total` to the metric name (e.g., `airflow_scheduler_heartbeat_total`, not `airflow_scheduler_heartbeat`). This differs from the StatsD metric names documented in older Airflow versions.
 **Decision:** When building Grafana dashboards or alert rules for Airflow OTel metrics, always verify actual metric names via `curl localhost:9090/api/v1/query?query={__name__=~"airflow.*"}` before writing PromQL queries. Gauge metrics (e.g., `airflow_dagbag_size`, `airflow_executor_open_slots`) keep their original names; only counters get the `_total` suffix.
 
 ### 2. Grafana Provisioned Datasource UIDs Must Be Explicit
+
 **Observation:** Grafana auto-generates random UIDs for provisioned datasources when no `uid:` field is specified in `datasources.yaml` (e.g., `PBFA97CFB590B2093`). Provisioned dashboards referencing `"uid": "prometheus"` silently fail to resolve the datasource — panels render as "No data" with no error in the UI. Changing the UID after initial provisioning causes Grafana to crash on startup with `Datasource provisioning error: data source not found`.
 **Decision:** Always set explicit `uid:` fields in `telemetry/grafana/provisioning/datasources/datasources.yaml` (`prometheus`, `loki`, `jaeger`) to match what dashboards reference. If changing UIDs on an existing Grafana instance, force-recreate the container (`docker compose up -d --force-recreate grafana`) to clear the stale internal state. Ephemeral Grafana storage makes this safe for local dev.
 
 ---
 
+## 🔬 Linting & Static Analysis
+
+### 1. golangci-lint v2 Config Format
+
+**Observation:** golangci-lint v2 introduced breaking config changes. It requires `version: "2"` at the top of `.golangci.yml`. `goimports` is now a **formatter** (under `formatters.enable`), not a linter. Linter settings moved under `linters.settings`. Test file exclusions use an `exclusions` block with `rules` and `paths`.
+**Decision:** Config at `go-services/.golangci.yml` uses the v2 schema. Run `golangci-lint run ./...` per service directory.
+
+### 2. sqlfluff Has No Flink SQL Dialect
+
+**Observation:** sqlfluff supports `postgres`, `ansi`, `sparksql`, and many dialects — but not Flink SQL. Flink SQL uses backtick identifiers, JDBC `WITH (...)` connector syntax, and `${}` env var placeholders that no dialect can parse. Even with `ignore = parsing`, the number of false positives made linting useless.
+**Decision:** Only lint Supabase migrations (postgres dialect). Flink SQL files are skipped entirely. The `.sqlfluff` config and Taskfile `lint:sql` task reflect this.
+
+### 3. Mermaid Diagram Syntax for Linter Compatibility
+
+**Observation:** The `@probelabs/maid` linter enforces stricter syntax than the mermaid renderer accepts. Key rules: (a) edge labels must not use quotes inside pipes — `-->|text|` not `-->|"text"|`, (b) cylinder node labels `[(text)]` must not have inner quotes — `[(text)]` not `[("text")]`, (c) parentheses inside edge labels break the parser — rephrase to avoid `()` in `|...|`.
+**Decision:** All `.mmd` files follow linter-compatible syntax. This is stricter than what mermaid renders but ensures automated validation catches real errors. `click` statements use the `href` keyword form.
+
+### 4. markdownlint Rules Disabled for Documentation Projects
+
+**Observation:** Out of 1,716 initial violations, 963 were MD013 (line length at 80 chars) and 224 were MD060 (table column spacing). These rules are designed for prose writing, not technical documentation with code blocks, URLs, and compact tables.
+**Decision:** Config at `.markdownlint-cli2.yaml` disables: MD013 (line-length), MD033 (inline HTML), MD041 (first-line heading), MD060 (table column style), MD036 (emphasis-as-heading), MD028 (blank line in blockquote — false positive on GFM callouts). AGENT.md symlinks excluded to avoid double-linting.
+
+### 5. ruff target-version Must Account for Mixed Python Runtimes
+
+**Observation:** ruff's `target-version` controls which pyupgrade (`UP`) rules are applied. With `target-version = "py312"`, rule UP017 replaces `datetime.timezone.utc` with `datetime.UTC` — but `datetime.UTC` was introduced in Python 3.11. The PyFlink Docker image runs Python 3.10, so this auto-upgrade causes `ImportError: cannot import name 'UTC' from 'datetime'` at runtime, crashing all 3 PyFlink processors.
+**Decision:** Keep `target-version = "py312"` globally (most code runs 3.12), but suppress `UP017` for `pyflink_jobs/*.py` via `per-file-ignores` in `pyproject.toml`. This is narrower than lowering the global target, which would disable all modern syntax upgrades for 3.12 code. When the PyFlink image upgrades to 3.11+, the suppression can be removed.
+
+### 6. mypy Requires explicit_package_bases for Non-Standard Layouts
+
+**Observation:** Running mypy across multiple Python directories (`pyspark_apps/`, `pyflink_jobs/`, `flink_jobs/`, `airflow/`) causes "duplicate module name" and "source file found twice under different module names" errors. This happens because multiple directories contain `identity/` packages or standalone scripts without `__init__.py`.
+**Decision:** Set `explicit_package_bases = true` in `[tool.mypy]` and pass `--explicit-package-bases` in the Taskfile. Airflow errors suppressed via `[[tool.mypy.overrides]]` since Airflow stubs aren't installed locally.
+
 ## 📦 Project Philosophy
 
 ### 1. The "Base Stack" Strategy
+
 **Observation:** There is a tendency to rename repositories every time a new product (e.g., SpaceTaxi) is built on top.
 **Decision:** Maintain the core repository as `event-substrate`. New products are built as **branches** or **consumers** on top of this chassis, preserving the proven infrastructure while allowing rapid product iteration.

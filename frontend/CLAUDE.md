@@ -23,3 +23,7 @@ Browser tests use **Playwright**. Run: `task test:browser` (requires `task front
 - `media.js` — upload, download, delete API functions
 - `main.js` — DOM wiring, media browser, delete confirmation modal, Realtime subscription
 - `style.css` — glassmorphism design system
+
+## Linting
+
+Uses ESLint v9 flat config at `frontend/eslint.config.js`. Rules: no-unused-vars (warn), no-undef (error), eqeqeq (error), no-var (error), prefer-const (warn). Browser globals and vitest globals declared. Run: `task lint:frontend` or `cd frontend && npx eslint .`. Auto-fix: `cd frontend && npx eslint --fix .`.

@@ -11,27 +11,29 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 ---
 
 ## Architecture & Tech Stack
-*   **Blueprint:** Domain-Driven Design (DDD) & Event Sourcing
-*   **Container Runtime:** OrbStack (Optimized for Apple Silicon, running Docker and Kubernetes)
-*   **Identity & Read DB:** Supabase CLI (PostgreSQL, GoTrue, Realtime)
-*   **Ingress Gateway:** Go custom microservice (`api-gateway`)
-*   **Background Consumers:** Go custom microservices (`message-consumer`, `media-service`)
-*   **Message Broker:** Redpanda (Kafka-compatible with native Iceberg Tiered Storage)
-*   **Schema Registry:** Confluent Schema Registry (Avro)
-*   **Stream Processor:** Apache Flink (Stateful SQL & Python processing)
-*   **Data Lake:** MinIO (S3) + Project Nessie (Iceberg REST Catalog)
-*   **Analytical Warehouse:** ClickHouse (Real-Time OLAP)
-*   **Build System:** Task (go-task) with incremental change detection
-*   **K8s Packaging:** Helm chart (`charts/event-substrate/`) for Go services + Spark apps
-*   **CI/CD:** GitHub Actions with path-filtered builds + GHCR image push
-*   **Monitoring:** OpenTelemetry + Prometheus + Grafana + Jaeger
-*   **Batch Orchestration:** Apache Airflow 3.1.7 (Helm 1.19.0 on K8s, KubernetesExecutor)
-*   **Batch Processing:** Apache Spark 4.0.2 (Spark Operator on K8s, Iceberg REST Catalog)
-*   **Data Lineage:** Marquez 0.49.0 + OpenLineage (Spark listener + Airflow provider)
+
+* **Blueprint:** Domain-Driven Design (DDD) & Event Sourcing
+* **Container Runtime:** OrbStack (Optimized for Apple Silicon, running Docker and Kubernetes)
+* **Identity & Read DB:** Supabase CLI (PostgreSQL, GoTrue, Realtime)
+* **Ingress Gateway:** Go custom microservice (`api-gateway`)
+* **Background Consumers:** Go custom microservices (`message-consumer`, `media-service`)
+* **Message Broker:** Redpanda (Kafka-compatible with native Iceberg Tiered Storage)
+* **Schema Registry:** Confluent Schema Registry (Avro)
+* **Stream Processor:** Apache Flink (Stateful SQL & Python processing)
+* **Data Lake:** MinIO (S3) + Project Nessie (Iceberg REST Catalog)
+* **Analytical Warehouse:** ClickHouse (Real-Time OLAP)
+* **Build System:** Task (go-task) with incremental change detection
+* **K8s Packaging:** Helm chart (`charts/event-substrate/`) for Go services + Spark apps
+* **CI/CD:** GitHub Actions with path-filtered builds + GHCR image push
+* **Monitoring:** OpenTelemetry + Prometheus + Grafana + Jaeger
+* **Batch Orchestration:** Apache Airflow 3.1.7 (Helm 1.19.0 on K8s, KubernetesExecutor)
+* **Batch Processing:** Apache Spark 4.0.2 (Spark Operator on K8s, Iceberg REST Catalog)
+* **Data Lineage:** Marquez 0.49.0 + OpenLineage (Spark listener + Airflow provider)
 
 ---
 
 ## Architecture Flow (The "Login Loop")
+
 1. **Auth Action:** User authenticates or signs up via the custom Vite Frontend (`@supabase/supabase-js`).
 2. **DB Trigger:** Supabase updates the `auth.users` table. PostgreSQL triggers (`pg_net` webhooks) fire JSON `POST` requests to the API Gateway at strictly authenticated internal maps (`/webhooks/login`).
 3. **External Client Ingress:** The custom Vite Frontend can also fire HTTP POSTs directly to the gateway (`/api/v1/events/{topic}`) secured by Supabase JWTs.
@@ -44,6 +46,7 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 > **Realtime Race Condition Engine Design:** Due to the extreme low-latency processing of the local Flink and Redpanda deployment, processed stream events are often inserted back into Postgres *faster* than the Vite frontend is physically capable of establishing its `supabase_realtime` WebSocket subscription immediately following an authentication action. To prevent clients from artificially "missing" their own immediate login notifications, the frontend `main.js` is engineered to explicitly REST-prefetch the latest historical notifications from the unified `user_notifications` table concurrently while establishing the live WebSocket.
 
 ### Feature Flow (User Messaging)
+
 1. **Action:** An authenticated user submits a text message on the Vite Frontend.
 2. **Ingress:** The Vite Frontend fires a REST POST directly to the Go API Gateway route `/api/v1/events/message` accompanied by the Supabase JWT.
 3. **Broker:** Go validates the JWT signature, enforces routing via `routes.yaml`, Avro-serializes the payload utilizing the `public/user/message.events.avsc` Confluent schema, and sinks it into the `public.user.message.events` Redpanda topic.
@@ -52,6 +55,7 @@ See [architecture.md](./docs/architecture.md) for a detailed architecture diagra
 6. **Websockets:** Supabase catches the `user_notifications` insertion on its logical replication hook and fires a payload over `supabase_realtime` websockets. RLS policies scope delivery: broadcast messages reach all authenticated clients, while direct messages are only visible to the sender and the designated recipient. The frontend parses the `event_type` and `payload` fields to render the notification.
 
 ### Feature Flow (Upload Saga — Fully Async Media Upload + Credit Economy)
+
 The media upload pipeline is a **fully async event-driven saga** spanning 5 services and 15 Kafka topics. Every state transition is a first-class event — no silent DB writes.
 
 1. **Intent Submission:** The Frontend calls `POST /api/v1/media/upload-intent` with the Supabase JWT and file metadata (`file_name`, `media_type`, `file_size`). The API Gateway returns `202 Accepted` with a `request_id` and produces an `UploadIntent` event to `internal.media.upload.intent`.
@@ -70,12 +74,14 @@ The media upload pipeline is a **fully async event-driven saga** spanning 5 serv
 > **Credit Deduction Timing:** Credits are deducted **at intent time** (atomic SQL in PyFlink), not at upload completion. If the upload fails or is abandoned, the TTL saga automatically refunds the credit after 15 minutes. This ensures users are never permanently charged for incomplete uploads.
 
 ### Feature Flow (Download Saga — Async Presigned GET URL)
+
 1. **Intent:** The Frontend calls `POST /api/v1/media/download-intent` with the JWT and `file_path`. Returns `202 Accepted` with `request_id`.
 2. **Media Service:** Consumes `internal.media.download.intent`, verifies file ownership via `media_files` (active files only), generates a presigned GET URL, and emits `FileDownloadUrlSigned` to `public.media.download.signed`. If the file isn't found, emits `FileDownloadRejected`.
 3. **Notification:** Flink routes `download.signed` to a `media.download_ready` notification (with `download_url`) or `download.rejected` to `media.download_rejected`.
 4. **Browser Download:** The Frontend receives the URL via Realtime and opens it in a new tab.
 
 ### Feature Flow (Delete Saga — Async Soft-Delete + MinIO Removal)
+
 1. **Intent:** The Frontend calls `POST /api/v1/media/delete-intent` with the JWT and `file_path`. Returns `202 Accepted` with `request_id`.
 2. **Media Service:** Consumes `internal.media.delete.intent`, verifies ownership, removes the object from MinIO, soft-deletes the DB row (`status='deleted'`), and emits `FileDeleted` to `public.media.delete.events`. On failure, emits `FileDeleteRejected`.
 3. **Notification:** Flink routes `delete.events` to `media.file_deleted` and `delete.rejected` to `media.delete_rejected`.
@@ -85,9 +91,10 @@ The media upload pipeline is a **fully async event-driven saga** spanning 5 serv
 > **Delete Ordering:** MinIO object removal happens *before* the DB soft-delete. If MinIO fails, the file still exists and the user can retry. If the DB fails after MinIO succeeds, the object is gone but the soft-delete can be retried (idempotent).
 
 ### Additional Processing & Storage
-*   **Media File Storage (MinIO / GCS):** Uploaded media files land in the `uploads/` prefix of the `media-uploads` MinIO bucket (24h lifecycle policy). The move-to-permanent saga reliably promotes them to the `files/` prefix (no lifecycle). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
-*   **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
-*   **PyFlink Microservices:** Four Python Flink applications run natively in K8s: `credit_check_processor.py` (atomic credit check + deduction for upload intents), `ttl_expiry_processor.py` (dual-stream `KeyedCoProcessFunction` for upload timeout saga), `move_saga_processor.py` (move-to-permanent saga supervisor with retry + DLQ), and `echo_processor.py` for identity event echo.
+
+* **Media File Storage (MinIO / GCS):** Uploaded media files land in the `uploads/` prefix of the `media-uploads` MinIO bucket (24h lifecycle policy). The move-to-permanent saga reliably promotes them to the `files/` prefix (no lifecycle). Files are uploaded directly from the browser via presigned URLs — the API Gateway never proxies file bytes. File metadata is tracked in the `media_files` Postgres table with soft-delete via a `status` column. Allowed media types: JPEG, PNG, GIF, WebP, MP4, WebM, MPEG, WAV, OGG.
+* **Data Lake (Iceberg / MinIO / Nessie):** Redpanda tiered storage automatically materializes the `internal.platform.unified.events` and `internal.identity.login.echo` topics into S3 object storage (MinIO) as open-format Apache Iceberg tables. Project Nessie serves as the Iceberg REST Catalog.
+* **PyFlink Microservices:** Four Python Flink applications run natively in K8s: `credit_check_processor.py` (atomic credit check + deduction for upload intents), `ttl_expiry_processor.py` (dual-stream `KeyedCoProcessFunction` for upload timeout saga), `move_saga_processor.py` (move-to-permanent saga supervisor with retry + DLQ), and `echo_processor.py` for identity event echo.
 
 ---
 
@@ -95,70 +102,82 @@ The media upload pipeline is a **fully async event-driven saga** spanning 5 serv
 
 When extending or maintaining this platform, **strict adherence to framework and language best practices** is mandatory. This ensures longevity, performance, and readability across microservices:
 
-*   **Go Architecture Context:** Always utilize type-safe, proven methodologies. Avoid quick scripts. For example, environment configurations must always parse through structural abstraction patterns like `spf13/viper` mapped strictly to defined `Config{}` structs, rather than scattering `os.Getenv` raw calls throughout the codebase. Use standardized libraries (`hamba/avro`, `twmb/franz-go`, `lib/pq` over opaque ORMs).
-*   **Docker Container Recompilation (Compiled Languages):** When modifying source code for compiled languages (such as Go) that run inside Docker containers, executing `docker compose restart <service>` is **insufficient**. You must strictly execute `docker compose build --no-cache <service>` followed by `docker compose up -d <service>` to flush the cache, recompile the binary natively, and boot the container utilizing the new code.
-*   **Javascript/Vite Context:** Ensure clear asynchronous fetch boundaries, structured error handling boundaries, native DOM sanitization routines before innerHTML modification, and modular variable scopes. Avoid massive flat `main.js` files where logically splittable.
-*   **SQL Context:** Write explicit, declarative schema management relying natively on intrinsic Postgres features (RLS, Log Replication realtime engines). Let the database handle access gating optimally over backend application server code.
+* **Go Architecture Context:** Always utilize type-safe, proven methodologies. Avoid quick scripts. For example, environment configurations must always parse through structural abstraction patterns like `spf13/viper` mapped strictly to defined `Config{}` structs, rather than scattering `os.Getenv` raw calls throughout the codebase. Use standardized libraries (`hamba/avro`, `twmb/franz-go`, `lib/pq` over opaque ORMs).
+* **Docker Container Recompilation (Compiled Languages):** When modifying source code for compiled languages (such as Go) that run inside Docker containers, executing `docker compose restart <service>` is **insufficient**. You must strictly execute `docker compose build --no-cache <service>` followed by `docker compose up -d <service>` to flush the cache, recompile the binary natively, and boot the container utilizing the new code.
+* **Javascript/Vite Context:** Ensure clear asynchronous fetch boundaries, structured error handling boundaries, native DOM sanitization routines before innerHTML modification, and modular variable scopes. Avoid massive flat `main.js` files where logically splittable.
+* **SQL Context:** Write explicit, declarative schema management relying natively on intrinsic Postgres features (RLS, Log Replication realtime engines). Let the database handle access gating optimally over backend application server code.
 
 ---
 
 ## Directory Structure
-- `Taskfile.yml`: Build system definition with incremental change detection for Go services.
-- `.github/workflows/`: GitHub Actions CI (path-filtered builds + GHCR push) and deploy skeleton (staging/production).
-- `avro/`: Avro schemas organized by domain (e.g., `avro/public/identity/login.events.avsc`). Directory paths map to Kafka topic names.
-- `airflow/`: Airflow DAGs, Helm values (local + prod), and PV/PVC manifests for KubernetesExecutor deployment.
-- `charts/event-substrate/`: Helm chart for Go services and Spark SparkApplication CRDs.
-- `clickhouse/`: Initialization SQL scripts for the embedded analytical datastore.
-- `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
-- `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
-- `tests/e2e/`: End-to-end pipeline tests validating the full data flow into `user_notifications`.
-- `docs/github_cicd_plan.md`: Roadmap for GitHub Actions, multisite runners, and the "Lean CI" profile.
-- `docs/data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
-- `docs/data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
-- `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
-- `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`, `move_saga_processor.py`).
-- `pyspark_apps/`: PySpark batch jobs organized by domain (`identity/`, `media/`, `analytics/`). Each job has its own `app.py`, tests, and fixtures. Common session config in `common/session.py`.
-- `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).
-- `kubernetes/`: Kubernetes deployment manifests for Flink, Spark, Go services, and operators.
-- `supabase/`: Database migrations and webhook configurations.
-- `telemetry/`: Telemetry configuration files (Prometheus, Grafana, Loki, OpenTelemetry, Marquez).
+
+* `Taskfile.yml`: Build system definition with incremental change detection for Go services.
+* `.github/workflows/`: GitHub Actions CI (path-filtered builds + GHCR push) and deploy skeleton (staging/production).
+* `avro/`: Avro schemas organized by domain (e.g., `avro/public/identity/login.events.avsc`). Directory paths map to Kafka topic names.
+* `airflow/`: Airflow DAGs, Helm values (local + prod), and PV/PVC manifests for KubernetesExecutor deployment.
+* `charts/event-substrate/`: Helm chart for Go services and Spark SparkApplication CRDs.
+* `clickhouse/`: Initialization SQL scripts for the embedded analytical datastore.
+* `docker-compose.yml`: Infrastructure definition (Redpanda, Schema Registry, MinIO, ClickHouse).
+* `flink_jobs/`: Flink SQL scripts with `${ENV_VAR}` placeholders resolved at runtime by `sql_runner.py`. Kafka source tables are registered centrally; SQL files only define sinks and INSERT logic.
+* `tests/e2e/`: End-to-end pipeline tests validating the full data flow into `user_notifications`.
+* `docs/github_cicd_plan.md`: Roadmap for GitHub Actions, multisite runners, and the "Lean CI" profile.
+* `docs/data_governance_plan.md`: Strategy for Polaris Catalog, Apache Ranger, and PII masking.
+* `docs/data_processing_plan.md`: Blueprint for Spark on K8s and Airflow orchestration.
+* `frontend/`: Vanilla Vite web application providing the sleek UI for Logins, Signups, and Media Uploads. Includes `media.js` module with upload, credit check, and file management functions.
+* `pyflink_jobs/`: Python Flink scripts (`echo_processor.py`, `credit_check_processor.py`, `ttl_expiry_processor.py`, `move_saga_processor.py`).
+* `pyspark_apps/`: PySpark batch jobs organized by domain (`identity/`, `media/`, `analytics/`). Each job has its own `app.py`, tests, and fixtures. Common session config in `common/session.py`.
+* `go-services/`: Go microservices (`api-gateway`, `message-consumer`, `media-service`).
+* `kubernetes/`: Kubernetes deployment manifests for Flink, Spark, Go services, and operators.
+* `supabase/`: Database migrations and webhook configurations.
+* `telemetry/`: Telemetry configuration files (Prometheus, Grafana, Loki, OpenTelemetry, Marquez).
 
 ## Running the Platform
 
 The platform uses [Task](https://taskfile.dev) (`go-task`) as its build system. Task provides **incremental builds** — Go binaries and Docker images are only rebuilt when their source files change, and Flink ConfigMaps are only re-applied when SQL or Python sources are modified.
 
 ### Prerequisites
+
 ```bash
 brew install go-task
 ```
 
 ### First-time Setup
+
 Installs tools (Helm, Supabase CLI, kubectl), initializes databases, auto-discovers and registers Avro schemas, creates Kafka topics, enables Iceberg, and brings up the full stack:
+
 ```bash
 task init
 ```
 
 ### Subsequent Runs
+
 Starts the platform after a shutdown. Only rebuilds Go Docker images if source files changed since the last build:
+
 ```bash
 task start
 ```
 
 ### Starting the Frontend
+
 To launch the glassmorphism web UI:
+
 1. Copy `frontend/.env.example` to `frontend/.env` and paste your Supabase Anon Key (printed during `task init`).
 2. Run the dev server:
+
 ```bash
 task frontend
 ```
 
 > [!NOTE]
 > **Local Signup Flow**: By default, local Supabase Auth has email confirmations enabled. When you create a new account in the UI, you won't be able to log in immediately. You must either:
+>
 > 1. Manually confirm the email via the local InBucket dashboard at [http://127.0.0.1:54324](http://127.0.0.1:54324)
 > 2. Disable email confirmations entirely in `supabase/config.toml` (`enable_signup = true`, `double_confirm_changes = false`).
 
 ### Shutdown
+
 Stops Supabase, Docker Compose, and deletes Kubernetes jobs:
+
 ```bash
 task shutdown
 ```
@@ -300,74 +319,87 @@ task shutdown
 The platform includes a production-grade observability stack with full instrumentation across Go microservices, Flink processors, and infrastructure layers. The stack is designed to mirror Datadog or Google Cloud Trace/Monitoring without vendor lock-in.
 
 ### Telemetry Stack Components
-*   **OpenTelemetry Collector:** Central hub (OTLP gRPC on 4317, StatsD UDP on 8125) receiving signals from all services
-*   **Prometheus:** Metrics storage + scraping engine (port 9090) — includes custom Kafka metrics, HTTP server metrics, and infrastructure metrics (Redpanda, MinIO, postgres)
-*   **Loki:** Log aggregation (port 3100) — consumes structured JSON logs from Go services via zerolog
-*   **Jaeger:** Distributed tracing (port 16686) — end-to-end request traces with span context propagation
-*   **Grafana:** Dashboard visualization (port 3000, no login required) — 6 provisioned dashboards with golden signals, alerts, saga health, K8s cluster metrics, and Airflow observability
+
+* **OpenTelemetry Collector:** Central hub (OTLP gRPC on 4317, StatsD UDP on 8125) receiving signals from all services
+* **Prometheus:** Metrics storage + scraping engine (port 9090) — includes custom Kafka metrics, HTTP server metrics, and infrastructure metrics (Redpanda, MinIO, postgres)
+* **Loki:** Log aggregation (port 3100) — consumes structured JSON logs from Go services via zerolog
+* **Jaeger:** Distributed tracing (port 16686) — end-to-end request traces with span context propagation
+* **Grafana:** Dashboard visualization (port 3000, no login required) — 6 provisioned dashboards with golden signals, alerts, saga health, K8s cluster metrics, and Airflow observability
 
 ### Access URLs
+
 When you run `task start`, the telemetry stack boots up alongside the infrastructure:
-*   **Grafana UI:** [http://localhost:3000](http://localhost:3000)
-*   **Prometheus UI:** [http://localhost:9090](http://localhost:9090)
-*   **Jaeger UI:** [http://localhost:16686](http://localhost:16686)
-*   **Loki:** Port 3100 (queried via Grafana, not directly)
-*   **Marquez API:** [http://localhost:5050](http://localhost:5050) (OpenLineage event receiver + REST queries)
-*   **Marquez Web UI:** [http://localhost:3001](http://localhost:3001) (visual lineage graph)
+
+* **Grafana UI:** [http://localhost:3000](http://localhost:3000)
+* **Prometheus UI:** [http://localhost:9090](http://localhost:9090)
+* **Jaeger UI:** [http://localhost:16686](http://localhost:16686)
+* **Loki:** Port 3100 (queried via Grafana, not directly)
+* **Marquez API:** [http://localhost:5050](http://localhost:5050) (OpenLineage event receiver + REST queries)
+* **Marquez Web UI:** [http://localhost:3001](http://localhost:3001) (visual lineage graph)
 
 ### Grafana Dashboards
+
 Six provisioned JSON dashboards provide full platform visibility:
-*   **Platform Overview (UID: `platform-overview`)** — service health status, golden signals (latency/errors/throughput), Kafka consumer lag, infrastructure metrics
-*   **Go Services (UID: `go-services`)** — per-service HTTP request duration/errors, active requests, Kafka producer/consumer message rates and errors
-*   **Kafka & Redpanda (UID: `kafka-redpanda`)** — cluster health, topic partition distribution, consumer group lag, disk/CPU/network resources
-*   **Media Saga Pipeline (UID: `media-saga`)** — upload funnel (intents → approvals → signed URLs → confirms), saga DLQ queue depth, Flink processor health
-*   **Kubernetes Cluster (UID: `kubernetes`)** — pod status/restarts by namespace, deployment & statefulset replica health, CPU/memory resource requests, node conditions
-*   **Airflow Orchestration (UID: `airflow`)** — scheduler heartbeat, DAG bag size, DAG run duration/states, task instance states, executor/pool slots, task queue depth
+
+* **Platform Overview (UID: `platform-overview`)** — service health status, golden signals (latency/errors/throughput), Kafka consumer lag, infrastructure metrics
+* **Go Services (UID: `go-services`)** — per-service HTTP request duration/errors, active requests, Kafka producer/consumer message rates and errors
+* **Kafka & Redpanda (UID: `kafka-redpanda`)** — cluster health, topic partition distribution, consumer group lag, disk/CPU/network resources
+* **Media Saga Pipeline (UID: `media-saga`)** — upload funnel (intents → approvals → signed URLs → confirms), saga DLQ queue depth, Flink processor health
+* **Kubernetes Cluster (UID: `kubernetes`)** — pod status/restarts by namespace, deployment & statefulset replica health, CPU/memory resource requests, node conditions
+* **Airflow Orchestration (UID: `airflow`)** — scheduler heartbeat, DAG bag size, DAG run duration/states, task instance states, executor/pool slots, task queue depth
 
 ### Alert Rules
+
 Twelve alert rules (configurable in `telemetry/grafana/provisioning/alerting/platform-alerts.yaml`):
-*   **Go service down** — liveness check failed for api-gateway, media-service, or message-consumer
-*   **Go service high error rate** — >5% of requests returning 5xx errors
-*   **Go service high latency** — p99 HTTP request duration >5 seconds
-*   **Media saga DLQ growing** — dead-letter topic lag increasing (indicates move failures)
-*   **Redpanda disk high** — cluster disk usage >80%
-*   **Flink job down** — PyFlink credit check, move saga, or TTL expiry processor crashed
-*   **Postgres connections high** — >70% of available connection slots consumed
-*   **Kafka consumer lag** — message-consumer group lag >100 messages
-*   **K8s pod crash-loop** — pod container restarting repeatedly (3m sustained)
-*   **K8s pod pending** — pod stuck in Pending state for >5 minutes
-*   **Airflow scheduler down** — scheduler heartbeat absent for >2 minutes (critical)
-*   **Airflow DAG failure rate** — DAG runs failing in the last 5 minutes
+
+* **Go service down** — liveness check failed for api-gateway, media-service, or message-consumer
+* **Go service high error rate** — >5% of requests returning 5xx errors
+* **Go service high latency** — p99 HTTP request duration >5 seconds
+* **Media saga DLQ growing** — dead-letter topic lag increasing (indicates move failures)
+* **Redpanda disk high** — cluster disk usage >80%
+* **Flink job down** — PyFlink credit check, move saga, or TTL expiry processor crashed
+* **Postgres connections high** — >70% of available connection slots consumed
+* **Kafka consumer lag** — message-consumer group lag >100 messages
+* **K8s pod crash-loop** — pod container restarting repeatedly (3m sustained)
+* **K8s pod pending** — pod stuck in Pending state for >5 minutes
+* **Airflow scheduler down** — scheduler heartbeat absent for >2 minutes (critical)
+* **Airflow DAG failure rate** — DAG runs failing in the last 5 minutes
 
 ### Instrumentation Details
 
 #### Go Services (api-gateway, media-service, message-consumer)
+
 Each service includes:
-*   **OpenTelemetry SDK** — initialized in `otel.go` via `initOTel()`, exports traces+metrics to OTel Collector (OTLP gRPC on `OTEL_EXPORTER_OTLP_ENDPOINT`, default `http://host.docker.internal:4317`)
-*   **Structured Logging** — zerolog JSON logging to stderr (captured by Loki via Docker driver)
-*   **Health Endpoints** — `/healthz` (liveness, always 200), `/readyz` (readiness, checks Kafka/DB connectivity)
-*   **HTTP Auto-Instrumentation** — `otelhttp` middleware auto-tracks `http.server.request.duration`, `http.server.active_requests`, `http.server.request.body.size`
-*   **Custom Kafka Metrics** — `kafka.producer.messages.total`, `kafka.consumer.messages.total`, `kafka.consumer.errors.total` (meter-based, updated on each message)
-*   **K8s Probes** — liveness probe targets `/healthz:8080`, readiness probe targets `/readyz:8080` (message-consumer also exposes on port 8091)
+
+* **OpenTelemetry SDK** — initialized in `otel.go` via `initOTel()`, exports traces+metrics to OTel Collector (OTLP gRPC on `OTEL_EXPORTER_OTLP_ENDPOINT`, default `http://host.docker.internal:4317`)
+* **Structured Logging** — zerolog JSON logging to stderr (captured by Loki via Docker driver)
+* **Health Endpoints** — `/healthz` (liveness, always 200), `/readyz` (readiness, checks Kafka/DB connectivity)
+* **HTTP Auto-Instrumentation** — `otelhttp` middleware auto-tracks `http.server.request.duration`, `http.server.active_requests`, `http.server.request.body.size`
+* **Custom Kafka Metrics** — `kafka.producer.messages.total`, `kafka.consumer.messages.total`, `kafka.consumer.errors.total` (meter-based, updated on each message)
+* **K8s Probes** — liveness probe targets `/healthz:8080`, readiness probe targets `/readyz:8080` (message-consumer also exposes on port 8091)
 
 #### Prometheus Scrape Targets
-*   **OTel Collector** (port 8888) — converts OTLP signals to Prometheus format
-*   **Redpanda Admin API** (port 9644, path `/public_metrics`) — cluster health, topic/partition metrics, resource usage
-*   **MinIO** (port 9000, path `/minio/v2/metrics/cluster`) — enabled via `MINIO_PROMETHEUS_AUTH_TYPE=public` env var
-*   **postgres-exporter** (port 9187) — connection pool, query latency, cache hit ratios
-*   **kube-state-metrics** (NodePort 30080) — K8s pod/deployment/statefulset/node metrics via `host.docker.internal`
+
+* **OTel Collector** (port 8888) — converts OTLP signals to Prometheus format
+* **Redpanda Admin API** (port 9644, path `/public_metrics`) — cluster health, topic/partition metrics, resource usage
+* **MinIO** (port 9000, path `/minio/v2/metrics/cluster`) — enabled via `MINIO_PROMETHEUS_AUTH_TYPE=public` env var
+* **postgres-exporter** (port 9187) — connection pool, query latency, cache hit ratios
+* **kube-state-metrics** (NodePort 30080) — K8s pod/deployment/statefulset/node metrics via `host.docker.internal`
 
 #### Airflow Telemetry (OTel)
-*   Airflow 3.x ships with built-in OpenTelemetry support (`apache-airflow[otel]`)
-*   Metrics and traces push to OTel Collector via OTLP HTTP on port 4318 (same path as Go services use gRPC on 4317)
-*   Configured in `airflow/values-local.yaml` under `config.metrics` and `config.traces`
+
+* Airflow 3.x ships with built-in OpenTelemetry support (`apache-airflow[otel]`)
+* Metrics and traces push to OTel Collector via OTLP HTTP on port 4318 (same path as Go services use gRPC on 4317)
+* Configured in `airflow/values-local.yaml` under `config.metrics` and `config.traces`
 
 #### Flink & PyFlink Instrumentation
-*   **StatsD Reporter** — Flink native `StatsDReporter` pushes metrics to OTel Collector UDP port 8125
-*   **Metrics** — Flink SQL/PyFlink jobs emit operator-level throughput, backpressure, and checkpoint timings
+
+* **StatsD Reporter** — Flink native `StatsDReporter` pushes metrics to OTel Collector UDP port 8125
+* **Metrics** — Flink SQL/PyFlink jobs emit operator-level throughput, backpressure, and checkpoint timings
 
 ### Data Flow Summary
-```
+
+```text
 Go Services (OTLP gRPC)        → OTel Collector → Prometheus (metrics)
                                                ↘ Loki (logs via zerolog)
                                                ↘ Jaeger (traces)
@@ -381,15 +413,19 @@ Infrastructure (Redpanda, MinIO, postgres-exporter) → Prometheus scrape
 ```
 
 ### Telemetry Storage Persistence
+
 Telemetry backends use named Docker volumes for local data persistence across `docker compose restart` cycles:
-*   **Prometheus:** `prometheus_data` volume, 15-day TSDB retention
-*   **Jaeger:** `jaeger_data` volume, Badger disk-backed span storage (replaces in-memory default)
-*   **Loki:** `loki_data` volume, persists chunk and index data
+
+* **Prometheus:** `prometheus_data` volume, 15-day TSDB retention
+* **Jaeger:** `jaeger_data` volume, Badger disk-backed span storage (replaces in-memory default)
+* **Loki:** `loki_data` volume, persists chunk and index data
 
 > [!NOTE]
 > Data survives `docker compose restart` and `docker compose stop/start`, but is destroyed on `docker compose down -v` (i.e., `task purge`). For production, swap to managed backends or S3/GCS — see `docs/productionization.md` Section 8.
 
 ### Migrating to Production (Datadog / Google Cloud)
+
 When moving from local development to a cloud provider like Datadog or Google Cloud Operations:
-1.  **Do not change the application code.** The Go and PyFlink apps remain completely untouched — all instrumentation is vendor-neutral OpenTelemetry.
-2.  Update the `exporters` block in your production `otel-collector-config.yaml` to use the vendor-specific exporter (e.g., `datadog` for Datadog, `googlecloud` for GCP, `splunk_hec` for Splunk). Provide your API keys and endpoint URLs. The collector will seamlessly route identical signals to your production platform.
+
+1. **Do not change the application code.** The Go and PyFlink apps remain completely untouched — all instrumentation is vendor-neutral OpenTelemetry.
+2. Update the `exporters` block in your production `otel-collector-config.yaml` to use the vendor-specific exporter (e.g., `datadog` for Datadog, `googlecloud` for GCP, `splunk_hec` for Splunk). Provide your API keys and endpoint URLs. The collector will seamlessly route identical signals to your production platform.

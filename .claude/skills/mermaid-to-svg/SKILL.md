@@ -9,6 +9,7 @@ Usage: /mermaid-to-svg [path]
 If no path argument is provided, default to `docs/architecture/overview.mmd` -> `docs/architecture/overview.svg` in the project root.
 
 Steps:
+
 1. Resolve the input `.mmd` file path (from argument or default).
 2. Derive the output `.svg` path by replacing the `.mmd` extension with `.svg`.
 3. **Click link substitution:** If the `.mmd` contains `click` directives with `.mmd"` targets, create a temp copy with `.mmd"` replaced by `.svg"` and use that as the mermaid-cli input. This keeps `.mmd` sources linking to `.mmd` (works in GitHub Mermaid rendering) while the generated `.svg` links to `.svg` files. Delete the temp file after generation.

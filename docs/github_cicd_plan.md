@@ -1,11 +1,13 @@
 # GitHub CI/CD Implementation Plan: Event Substrate
 
 ## 1. The Challenge: Resource Constraints
-A standard GitHub-hosted runner (`ubuntu-latest`) provides **2 vCPUs and 7 GB of RAM**. 
+
+A standard GitHub-hosted runner (`ubuntu-latest`) provides **2 vCPUs and 7 GB of RAM**.
 
 The current local development stack, optimized for OrbStack/Apple Silicon, exceeds these limits during a full `task init` or `task test:e2e` run.
 
 ### Estimated Resource Footprint (Local Stack)
+
 | Component | RAM Requirement | CPU Needs |
 | :--- | :--- | :--- |
 | **Flink (Job + Task Managers)** | ~2.0 GB | High (Java/Python) |
@@ -24,16 +26,19 @@ The current local development stack, optimized for OrbStack/Apple Silicon, excee
 To run this stack in GitHub, you have three primary infrastructure paths depending on your GitHub plan:
 
 ### A. Standard GitHub-Hosted Runners (GitHub Free/Pro)
+
 - **Spec:** 2 vCPUs, 7 GB RAM.
 - **Constraints:** Requires the **"Lean CI Profile"** (detailed below) to avoid OOM (Out of Memory) errors.
 - **Cost:** Uses your monthly "Free Minutes" quota (2,000 mins for Free).
 
 ### B. Larger GitHub-Hosted Runners (GitHub Team/Enterprise)
+
 - **Spec:** Options for 4, 8, or 16+ vCPUs and higher RAM.
 - **Benefits:** Can run the full stack identically to local development without thinning.
 - **Cost:** Pay-as-you-go (billed per minute, does not use free minutes).
 
 ### C. Self-Hosted Runners (All Plans)
+
 - **Spec:** Hardware you provide (e.g., a dedicated Mac, Linux VPS, or on-prem server).
 - **Benefits:** No cost for minutes; full control over resources. Ideal for 16GB+ RAM requirements typical of Flink/Redpanda stacks.
 - **Setup:** Managed via **Settings > Actions > Runners** in the GitHub repo UI.
@@ -41,12 +46,15 @@ To run this stack in GitHub, you have three primary infrastructure paths dependi
 ---
 
 ## 3. Proposed Strategy: "The Lean CI Profile"
+
 To successfully run E2E tests in a standard CI environment without paying for "Larger Runners," we must parameterize the infrastructure.
 
 ### A. Docker Compose Profiles
+
 We can use [Docker Compose Profiles](https://docs.docker.com/compose/profiles/) to disable "Human Observability" tools (Telemetry) during CI runs, as they are not required for functional verification.
 
 **Implementation Plan:**
+
 - Group `prometheus`, `loki`, `jaeger`, `grafana`, and `otel-collector` under the `telemetry` profile.
 - Group `clickhouse` under an `analytics` profile if it's not strictly required for the core notification flow tests.
 
@@ -60,6 +68,7 @@ services:
 ```
 
 ### B. Environment Variable Parameterization
+
 Parameterize memory and CPU limits in `docker-compose.yml` to allow the CI runner to "squeeze" services into the available memory.
 
 ```yaml
@@ -76,6 +85,7 @@ services:
 ---
 
 ## 3. CI/CD Workflow Stages
+
 To prevent timeouts and CPU starvation, the CI should be split into discrete phases:
 
 1. **Static Analysis & Linting:** (Go/JS/SQL) - Minimal resources.
@@ -92,6 +102,7 @@ To prevent timeouts and CPU starvation, the CI should be split into discrete pha
 ---
 
 ## 4. Proposed Taskfile Extensions
+
 We will add a specific task to handle the "Lean" startup for CI runners.
 
 ```yaml
@@ -109,6 +120,7 @@ tasks:
 To move from local development to a production-grade system, the platform will utilize **GitHub Environments** and **Infrastructure as Code (IaC)**.
 
 ### A. Environment Promotion Flow
+
 1. **Continuous Integration (CI):**
    - Triggered on PRs and merges to `main`.
    - Runs unit tests and "Lean CI" E2E tests.
@@ -122,12 +134,15 @@ To move from local development to a production-grade system, the platform will u
    - Promotes the exact same Docker image SHA verified in staging.
 
 ### B. Infrastructure as Code (IaC): Pulumi (Go SDK)
+
 Since the core microservices are written in Go, we will use the **Pulumi Go SDK** for infrastructure management.
+
 - **Unified Language:** Share logic between Go services and infra (e.g., constants, routing logic).
 - **Component Resources:** Create reusable blueprints for `FlinkJob` and `KafkaTopic`.
 - **Industry Standard:** Pulumi is a tier-one, industry-accepted IaC tool used by organizations like Snowflake and Atlassian.
 
 ### C. Push vs. Pull (Pulumi vs. Flux/ArgoCD)
+
 For the Event Substrate, we have chosen a **Push-based (Pulumi)** strategy over a **Pull-based (Flux/GitOps)** strategy for several technical reasons:
 
 1. **Orchestration Complexity:** Event-driven systems have tight dependencies (e.g., Create Topic → Register Schema → Start Flink Job). Pulumi manages this dependency graph explicitly, whereas Pull-based tools often result in "crash-loop" cycles until all components eventually become consistent.
@@ -136,7 +151,9 @@ For the Event Substrate, we have chosen a **Push-based (Pulumi)** strategy over 
 4. **Developer Experience:** Using Pulumi (Go) allows developers to stay within their primary language and IDE, avoiding the overhead of managing specialized GitOps controllers inside the cluster.
 
 ### D. State Management & Costs
+
 Pulumi offers flexible state management options:
+
 1. **Pulumi Cloud (Managed):**
    - **Community Tier:** Free forever for individuals.
    - **Team Tier:** Usage-based (first 150k resource-hours/month are free). Provides a managed dashboard and manual approval gates.
@@ -146,18 +163,22 @@ Pulumi offers flexible state management options:
    - **Privacy:** Infrastructure metadata never leaves your cloud environment.
 
 ### D. Custom Infrastructure Dashboard
+
 As an alternative to the Pulumi Cloud UI, a custom-built dashboard can be integrated into the existing Vite frontend (`/admin` route):
+
 - **Stack Visualization:** Automatically render architecture graphs from the Pulumi State JSON.
 - **Observability Integration:** Layer real-time Flink and Redpanda metrics over the infrastructure map.
 - **Local Control:** Each developer can run the dashboard locally, reading from the shared S3/GCS state bucket.
 - **Deployment Status:** Real-time visibility into active locks and resource health.
 
 ### F. Multicloud Portability & Agent-Driven Adaptation
+
 The "Event Substrate" is designed as a reusable chassis. While the core processing (Flink, Redpanda, K8s) is cloud-agnostic, the underlying infrastructure (Networking, IAM, Storage) varies by provider.
 
 To support rapid project reuse, we will follow an **"Agent-Facilitated Translation"** model:
-1. **Isolated Cloud Packages:** Cloud-specific Pulumi code will be kept in isolated directories (e.g., `deploy/infra/gcp` vs `deploy/infra/aws`). 
-2. **Standardized High-Level Resources:** We will define high-level components (e.g., `SecureBucket`, `PrivateNetwork`) that wrap cloud-specific resources. 
+
+1. **Isolated Cloud Packages:** Cloud-specific Pulumi code will be kept in isolated directories (e.g., `deploy/infra/gcp` vs `deploy/infra/aws`).
+2. **Standardized High-Level Resources:** We will define high-level components (e.g., `SecureBucket`, `PrivateNetwork`) that wrap cloud-specific resources.
 3. **Agent-Led Migration:** When cloning the substrate for a new project on a different cloud provider:
    - An agent (like Antigravity) can read the existing GCP implementation.
    - Using its knowledge of both APIs, the agent can regenerate the AWS equivalents in a new branch, ensuring naming conventions and security policies are preserved.
@@ -165,6 +186,7 @@ To support rapid project reuse, we will follow an **"Agent-Facilitated Translati
 4. **K8s as the Anchor:** By normalizing the compute layer in Kubernetes, we ensure that **90% of the platform (Flink jobs, Go services, and Kafka logic) never changes**, regardless of whether the cluster is GKE or EKS.
 
 ### G. Scaling for Large Teams: Blast Radius Management
+
 As the team grows, the monorepo must be structured to prevent a single commit from breaking the entire platform.
 
 1. **Path-Based CI Filtering:**
@@ -191,18 +213,23 @@ As the team grows, the monorepo must be structured to prevent a single commit fr
 As the platform expands to include mobile clients, strict separation and contract enforcement are required.
 
 ### A. Repository Isolation
+
 - **iOS & Android Repos:** Separation into `ios-client` and `android-client` standalone repositories is recommended.
 - **Benefits:** Prevents heavy mobile build tools (Xcode/Gradle) from slowing down backend CI/CD and allows for independent store release cycles.
 
 ### B. Registry-Driven Schema Syncing
+
 Instead of manual SDK maintenance, mobile clients follow a **"Registry-Pull & Commit"** pattern:
+
 1. **Source of Truth:** The Confluent Schema Registry serves as the central API gateway for data models.
 2. **Versioned Synchronization:** Mobile repos contain a `schema_version.json` file to pin specifically verified schema versions.
 3. **Local Code Generation:** Developers run a `task schemas:sync` script that fetches schemas from the registry and generates native Swift/Kotlin stubs.
 4. **Git-Ops for Models:** Generated stubs are **committed** to the mobile repo to ensure offline support, IDE traceability, and a clear history of data model changes.
 
 ### C. Automated Compatibility Enforcement (Avro)
+
 To protect the data pipeline, the backend CI enforces strict **Schema Evolution** rules:
+
 - **Compatibility Modes:** Topics are configured for `BACKWARD` or `FULL` compatibility.
 - **CI Barrier:** Any PR modifying a `.avsc` file triggers a `compatibility` check against the Registry API.
 - **Breaking Change Detection:** Deleting non-default fields or changing data types will trigger a build failure, preventing breaking changes from reaching production consumers.

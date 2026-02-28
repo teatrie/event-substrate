@@ -33,11 +33,13 @@ When in doubt, start one tier lower — it's cheaper to escalate than to overspe
 ### Step 2: Spawn Diagnostic Subagent
 
 Spawn a **read-only** subagent (`subagent_type: "Explore"`) with:
+
 - The full bug report (error message, test output, user description)
 - Instructions to investigate root cause WITHOUT making any code changes
 - The escalation directive (see below)
 
 The diagnostic subagent must return:
+
 1. **Root cause** — the exact file(s), line(s), and mechanism causing the failure
 2. **Impact scope** — which domains/services/tests are affected
 3. **Regression source** — what change introduced the bug (git blame/diff if applicable)
@@ -46,6 +48,7 @@ The diagnostic subagent must return:
 ### Step 3: Review Analysis
 
 You (the orchestrator) review the diagnostic report for soundness:
+
 - Does the root cause explain the observed symptoms?
 - Is the impact scope complete (no missed side effects)?
 - Is the proposed fix minimal and correct?
@@ -67,11 +70,13 @@ Once the user approves proceeding with the fix:
 Classify the fix into one of:
 
 **Single-domain fix** (one subagent):
+
 - Fix is contained to 1 file or 1 tightly-coupled set of files
 - No cross-service implications
 - Spawn a single `general-purpose` subagent at the appropriate model tier
 
 **Multi-domain fix** (agent team with waves):
+
 - Fix spans multiple services, languages, or architectural layers
 - Requires coordinated changes (e.g., schema + handler + test + config)
 - Follow the `/agent-team` protocol: domain decomposition → wave assignment → R-G-R per domain
@@ -79,11 +84,13 @@ Classify the fix into one of:
 ### Step 5: Execute Fix
 
 **For single-domain fixes:**
+
 1. Spawn a fix subagent with the diagnostic report, proposed fix, and R-G-R instructions
 2. The subagent must: write/update failing tests (RED) → implement the fix (GREEN) → refactor (REFACTOR)
 3. Review the result — verify all tests pass and the fix addresses the root cause
 
 **For multi-domain fixes:**
+
 1. Decompose into domains with explicit dependency ordering
 2. Organize into waves (independent domains parallel, dependent domains sequential)
 3. Spawn per-domain subagents at cost-effective model tiers
@@ -93,6 +100,7 @@ Classify the fix into one of:
 ### Step 6: Verification
 
 After all fix subagents complete:
+
 1. Verify the originally reported test/error now passes
 2. Verify no regressions in related test suites
 3. Report the fix summary to the user
@@ -110,6 +118,7 @@ After all fix subagents complete:
 ## Failure Escalation Protocol
 
 Same as `/agent-team`:
+
 1. Subagent stops after **3 failed attempts**
 2. Returns escalation report: exact error, 3 strategies tried, root cause hypothesis
 3. Orchestrator spawns new subagent at **next higher model tier** with full context

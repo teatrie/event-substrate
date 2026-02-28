@@ -48,72 +48,72 @@ graph TD
     FlinkCredits["Flink\ncredit_balance_processor\n(refund on expiry)"]:::stream
 
     %% Nodes — Supabase
-    UserNotifs[("user_notifications\n(Unified Egress)")]:::db
-    CreditLedger[("credit_ledger")]:::db
-    MediaFiles[("media_files")]:::db
+    UserNotifs[(user_notifications\nUnified Egress)]:::db
+    CreditLedger[(credit_ledger)]:::db
+    MediaFiles[(media_files)]:::db
     SupabaseRealtime["Supabase Realtime"]:::db
 
     %% Step 1: Upload intent
-    WebUI -->|"1a. POST /api/v1/media/upload-intent"| API
-    API -->|"1b. 202 Accepted"| WebUI
-    API -->|"1c. produce UploadIntent"| IntentTopic
+    WebUI -->|1a. POST /api/v1/media/upload-intent| API
+    API -->|1b. 202 Accepted| WebUI
+    API -->|1c. produce UploadIntent| IntentTopic
 
     %% Step 2: Credit check
-    IntentTopic -->|"2a. consume intent"| PyFlinkCreditCheck
-    PyFlinkCreditCheck -->|"2b. approved: deduct 1 credit"| ApprovedTopic
-    PyFlinkCreditCheck -->|"2b. rejected: insufficient credits"| RejectedTopic
-    PyFlinkCreditCheck -->|"2c. write deduction"| CreditLedger
+    IntentTopic -->|2a. consume intent| PyFlinkCreditCheck
+    PyFlinkCreditCheck -->|2b. approved: deduct 1 credit| ApprovedTopic
+    PyFlinkCreditCheck -->|2b. rejected: insufficient credits| RejectedTopic
+    PyFlinkCreditCheck -->|2c. write deduction| CreditLedger
 
     %% Step 3: Presigned URL generation
-    ApprovedTopic -->|"3a. consume approved"| UploadSigning
-    UploadSigning -->|"3b. produce FileUploadUrlSigned"| SignedTopic
+    ApprovedTopic -->|3a. consume approved| UploadSigning
+    UploadSigning -->|3b. produce FileUploadUrlSigned| SignedTopic
 
     %% Step 4: Notifications fanout
-    SignedTopic -->|"4. consume signed"| FlinkMediaNotifs
-    RejectedTopic -->|"4. consume rejected"| FlinkMediaNotifs
-    UploadConfirmed -->|"4. consume confirmed"| FlinkMediaNotifs
-    UploadDLQ -->|"4. consume dead-letter"| FlinkMediaNotifs
-    ExpiredTopic -->|"4. consume expired"| FlinkMediaNotifs
-    FlinkMediaNotifs -->|"4. JDBC insert"| UserNotifs
+    SignedTopic -->|4. consume signed| FlinkMediaNotifs
+    RejectedTopic -->|4. consume rejected| FlinkMediaNotifs
+    UploadConfirmed -->|4. consume confirmed| FlinkMediaNotifs
+    UploadDLQ -->|4. consume dead-letter| FlinkMediaNotifs
+    ExpiredTopic -->|4. consume expired| FlinkMediaNotifs
+    FlinkMediaNotifs -->|4. JDBC insert| UserNotifs
 
     %% Step 5: Frontend receives URL and uploads directly
-    UserNotifs -->|"5a. Supabase Realtime push"| SupabaseRealtime
-    SupabaseRealtime -->|"5b. presigned URL delivered"| WebUI
-    WebUI -->|"5c. presigned PUT (browser-direct,\nclaim check pattern)"| UploadsPrefix
+    UserNotifs -->|5a. Supabase Realtime push| SupabaseRealtime
+    SupabaseRealtime -->|5b. presigned URL delivered| WebUI
+    WebUI -->|5c. presigned PUT, browser-direct\nclaim check pattern| UploadsPrefix
 
     %% Step 6: MinIO upload webhook → move saga
-    UploadsPrefix -->|"6a. S3 PUT webhook"| UploadWebhook
-    UploadWebhook -->|"6b. produce UploadReceived\n(permanent_path, retry_count=0)"| UploadReceived
-    UploadWebhook -->|"6c. async MoveObject"| MoveObject
-    MoveObject -->|"6d. CopyObject to permanent"| FilesPrefix
+    UploadsPrefix -->|6a. S3 PUT webhook| UploadWebhook
+    UploadWebhook -->|6b. produce UploadReceived\npermanent_path, retry_count=0| UploadReceived
+    UploadWebhook -->|6c. async MoveObject| MoveObject
+    MoveObject -->|6d. CopyObject to permanent| FilesPrefix
 
     %% Step 7: MinIO file-ready webhook
-    FilesPrefix -->|"7a. S3 PUT webhook"| FileReadyWebhook
-    FileReadyWebhook -->|"7b. produce FileReady"| FileReady
+    FilesPrefix -->|7a. S3 PUT webhook| FileReadyWebhook
+    FileReadyWebhook -->|7b. produce FileReady| FileReady
 
     %% Step 8: Move Saga Processor
-    UploadReceived -->|"8a. consume"| MoveSaga
-    FileReady -->|"8b. consume"| MoveSaga
-    MoveSaga -->|"8c. both present"| UploadConfirmed
-    MoveSaga -->|"8d. timeout + retry < 3"| UploadRetry
-    MoveSaga -->|"8e. timeout + retry >= 3"| UploadDLQ
+    UploadReceived -->|8a. consume| MoveSaga
+    FileReady -->|8b. consume| MoveSaga
+    MoveSaga -->|8c. both present| UploadConfirmed
+    MoveSaga -->|8d. timeout + retry < 3| UploadRetry
+    MoveSaga -->|8e. timeout + retry >= 3| UploadDLQ
 
     %% Step 9: Retry loop
-    UploadRetry -->|"9a. consume retry"| RetryHandler
-    RetryHandler -->|"9b. sync MoveObject"| MoveObject
-    RetryHandler -->|"9c. re-produce\nretry_count + 1"| UploadReceived
+    UploadRetry -->|9a. consume retry| RetryHandler
+    RetryHandler -->|9b. sync MoveObject| MoveObject
+    RetryHandler -->|9c. re-produce\nretry_count + 1| UploadReceived
 
     %% Step 10: Confirmed downstream
-    UploadConfirmed -->|"10a. media_files INSERT"| MediaFiles
-    UploadConfirmed -->|"10b. credit_ledger INSERT"| CreditLedger
+    UploadConfirmed -->|10a. media_files INSERT| MediaFiles
+    UploadConfirmed -->|10b. credit_ledger INSERT| CreditLedger
 
     %% Step 11: TTL expiry processor (presigned URL timeout)
-    SignedTopic -->|"11a. arm timer"| PyFlinkTTL
-    UploadReceived -->|"11b. mark completed"| PyFlinkTTL
-    PyFlinkTTL -->|"11c. timer fired: no upload\nproduce FileUploadExpired"| ExpiredTopic
+    SignedTopic -->|11a. arm timer| PyFlinkTTL
+    UploadReceived -->|11b. mark completed| PyFlinkTTL
+    PyFlinkTTL -->|11c. timer fired: no upload\nproduce FileUploadExpired| ExpiredTopic
 
     %% Step 12: Expired event cleanup and refund
-    ExpiredTopic -->|"12a. consume expired\nbest-effort RemoveObject"| ExpiredCleanup
-    ExpiredCleanup -.->|"12b. delete partial object\n(best-effort)"| UploadsPrefix
-    ExpiredTopic -->|"12c. consume expired"| FlinkCredits
-    FlinkCredits -->|"12d. refund +1 credit"| CreditLedger
+    ExpiredTopic -->|12a. consume expired\nbest-effort RemoveObject| ExpiredCleanup
+    ExpiredCleanup -.->|12b. delete partial object\nbest-effort| UploadsPrefix
+    ExpiredTopic -->|12c. consume expired| FlinkCredits
+    FlinkCredits -->|12d. refund +1 credit| CreditLedger

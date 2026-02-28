@@ -15,9 +15,9 @@ graph TD
     end
 
     subgraph AuthCore["Auth & Core (Supabase)"]
-        Supabase[("PostgreSQL & Auth")]:::db
-        UserNotifs[("user_notifications\n(Unified Egress)")]:::db
-        CreditLedger[("credit_ledger + media_files")]:::db
+        Supabase[(PostgreSQL & Auth)]:::db
+        UserNotifs[(user_notifications\nUnified Egress)]:::db
+        CreditLedger[(credit_ledger + media_files)]:::db
     end
 
     subgraph APIGateway["API Gateway (Go)"]
@@ -40,7 +40,7 @@ graph TD
     end
 
     subgraph DataLake["Data Lake & OLAP"]
-        MinIO[("MinIO / S3")]:::db
+        MinIO[(MinIO / S3)]:::db
         Nessie["Nessie (Iceberg)"]:::registry
         ClickHouse["ClickHouse"]:::olap
     end
@@ -50,14 +50,14 @@ graph TD
     end
 
     %% Primary data flows
-    WebUI -->|"Auth"| Supabase
-    Supabase -->|"pg_net webhooks"| API
-    WebUI -->|"REST + JWT"| API
-    UserNotifs -.->|"Supabase Realtime"| WebUI
+    WebUI -->|Auth| Supabase
+    Supabase -->|pg_net webhooks| API
+    WebUI -->|REST + JWT| API
+    UserNotifs -.->|Supabase Realtime| WebUI
 
-    API -->|"Produce Avro"| PublicTopics
-    API -->|"Produce Intents"| InternalTopics
-    API <-->|"Fetch Schemas"| SchemaReg
+    API -->|Produce Avro| PublicTopics
+    API -->|Produce Intents| InternalTopics
+    API <-->|Fetch Schemas| SchemaReg
 
     PublicTopics --> IdentityMsg
     PublicTopics --> MediaSaga
@@ -66,28 +66,28 @@ graph TD
     PublicTopics --> GoConsumers
     PublicTopics --> UnifiedProc
 
-    IdentityMsg -->|"JDBC"| UserNotifs
-    MediaSaga -->|"JDBC"| UserNotifs
-    MediaSaga -->|"JDBC"| CreditLedger
-    GoConsumers -->|"INSERT"| UserNotifs
+    IdentityMsg -->|JDBC| UserNotifs
+    MediaSaga -->|JDBC| UserNotifs
+    MediaSaga -->|JDBC| CreditLedger
+    GoConsumers -->|INSERT| UserNotifs
 
-    UnifiedProc -->|"Produce"| InternalTopics
+    UnifiedProc -->|Produce| InternalTopics
     InternalTopics --> ClickHouse
-    PublicTopics -.->|"Tiered Storage"| Nessie
+    PublicTopics -.->|Tiered Storage| Nessie
     Nessie --> MinIO
 
-    WebUI -->|"Presigned PUT/GET"| MinIO
-    MinIO -->|"S3 webhooks"| MediaHTTP
-    MediaHTTP -->|"Produce"| InternalTopics
+    WebUI -->|Presigned PUT/GET| MinIO
+    MinIO -->|S3 webhooks| MediaHTTP
+    MediaHTTP -->|Produce| InternalTopics
     InternalTopics --> MoveSaga
-    MoveSaga -->|"Produce"| PublicTopics
-    MoveSaga -->|"Produce"| InternalTopics
+    MoveSaga -->|Produce| PublicTopics
+    MoveSaga -->|Produce| InternalTopics
 
-    API -.->|"OTLP"| OTel
-    IdentityMsg -.->|"StatsD"| OTel
+    API -.->|OTLP| OTel
+    IdentityMsg -.->|StatsD| OTel
 
     %% Click links to detail diagrams (source uses .mmd; SVG generation swaps to .svg)
-    click MediaSaga "./media-upload-saga.mmd" "Upload Saga Detail"
-    click GoConsumers "./media-download-delete.mmd" "Download & Delete Detail"
-    click IdentityMsg "./identity-messaging.mmd" "Identity & Messaging Detail"
-    click ClickHouse "./analytics.mmd" "Analytics & Data Lake Detail"
+    click MediaSaga href "./media-upload-saga.mmd"
+    click GoConsumers href "./media-download-delete.mmd"
+    click IdentityMsg href "./identity-messaging.mmd"
+    click ClickHouse href "./analytics.mmd"

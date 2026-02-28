@@ -44,13 +44,17 @@ webserver:
 
 # -- Scheduler ---------------------------------------------------------
 scheduler:
+  startupProbe:
+    failureThreshold: 30          # 30 * 10s = 300s for cold start under load
+    periodSeconds: 10
+    timeoutSeconds: 30
   resources:
     requests:
       cpu: 200m
-      memory: 384Mi
-    limits:
-      cpu: 300m
       memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
 
 # -- DAG Processor (Airflow 3.x: parses DAG files, separate from scheduler) --
 dagProcessor:
@@ -108,10 +112,9 @@ webserverSecretKey: dev-secret-key-change-in-prod
 config:
   api:
     auth_backends: "airflow.api.auth.backend.basic_auth"
+    workers: "2"
   core:
     load_examples: "False"
-  api:
-    workers: "2"
   webserver:
     expose_config: "True"
     warn_deployment_exposure: "False"

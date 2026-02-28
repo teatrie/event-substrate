@@ -18,7 +18,8 @@ SQL files cannot contain JAAS configs — the `;` in the JAAS string conflicts w
 Re-apply configmaps after SQL changes: `task k8s:configmaps`
 
 Then delete + re-apply the FlinkDeployment:
-```
+
+```bash
 kubectl delete -f kubernetes/flink-deployment.yaml
 kubectl apply -f kubernetes/flink-deployment.yaml
 ```
@@ -35,8 +36,14 @@ kubectl apply -f kubernetes/flink-deployment.yaml
 ## Move Saga Processor (PyFlink DataStream)
 
 `pyflink_jobs/move_saga_processor.py` — Keyed co-process function joining `internal.media.upload.received` + `internal.media.file.ready` by permanent file path. 120s timer with 3-retry loop:
+
 - Both present → `public.media.upload.confirmed`
 - Timeout + retry < 3 → `internal.media.upload.retry`
 - Timeout + retry >= 3 → `internal.media.upload.dead-letter`
 
 Deployment: `kubernetes/move-saga-deployment.yaml`, ConfigMap: `move-saga-scripts`
+
+## Linting
+
+- **sql_runner.py**: Linted with `ruff` (rules from root pyproject.toml). E501 and S608 suppressed for long Avro field definitions and intentional SQL f-strings.
+- **SQL files**: sqlfluff configured for postgres dialect (Flink SQL dialect not supported). Supabase migrations are linted; Flink SQL files are skipped due to parser incompatibility. Run: `task lint:sql`.

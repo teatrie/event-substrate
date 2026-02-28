@@ -19,7 +19,7 @@ JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" pytes
 
 ## Structure
 
-```
+```text
 pyspark_apps/
 ├── common/
 │   └── session.py         # create_spark_session() with Iceberg+OpenLineage config
@@ -36,6 +36,7 @@ pyspark_apps/
 ## Build Architecture
 
 Spark images use a **base + per-app** split:
+
 - `Dockerfile.spark.base` (repo root) — Spark 4.0.2 + JARs + common/ (shared across all apps)
 - `pyspark_apps/{domain}/{job_name}/Dockerfile` — thin layer FROM spark-base with app code only
 
@@ -63,3 +64,7 @@ task spark:test:docker
 6. Add SparkApplication template in `charts/event-substrate/templates/spark/`
 7. Add image values in `charts/event-substrate/values.yaml` under `spark:`
 8. Add path filter in `.github/workflows/ci.yml` for the new app
+
+## Linting
+
+Uses `ruff` for linting and `mypy` for type checking. Config in root `pyproject.toml`. Rules: E, W, F, I (imports), S (security), UP (pyupgrade). Line length 120. Run: `task lint:python` and `task check:types`. Auto-fix: `task lint:fix`.

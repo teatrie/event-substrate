@@ -22,6 +22,13 @@ jobs:
       pyflink: ${{ steps.filter.outputs.pyflink }}
       helm: ${{ steps.filter.outputs.helm }}
       flink-sql: ${{ steps.filter.outputs.flink-sql }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      any-python: ${{ steps.filter.outputs.any-python }}
+      any-sql: ${{ steps.filter.outputs.any-sql }}
+      any-yaml: ${{ steps.filter.outputs.any-yaml }}
+      any-k8s: ${{ steps.filter.outputs.any-k8s }}
+      any-docs: ${{ steps.filter.outputs.any-docs }}
+      any-mermaid: ${{ steps.filter.outputs.any-mermaid }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -52,6 +59,30 @@ jobs:
               - 'charts/**'
             flink-sql:
               - 'flink_jobs/**'
+            frontend:
+              - 'frontend/**'
+              - '!frontend/node_modules/**'
+            any-python:
+              - 'pyspark_apps/**'
+              - 'pyflink_jobs/**'
+              - 'flink_jobs/**'
+            any-sql:
+              - 'flink_jobs/*.sql'
+              - 'supabase/migrations/**'
+            any-yaml:
+              - '*.yaml'
+              - '*.yml'
+              - 'kubernetes/**'
+              - 'telemetry/**'
+              - 'airflow/**'
+              - 'charts/**'
+            any-k8s:
+              - 'kubernetes/**'
+            any-docs:
+              - '**/*.md'
+              - '.markdownlint-cli2.yaml'
+            any-mermaid:
+              - 'docs/architecture/*.mmd'
 
   test-go:
     needs: detect-changes
@@ -102,8 +133,142 @@ jobs:
       - name: Lint Helm chart
         run: helm lint charts/event-substrate/
 
+  lint-go:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: go-services/api-gateway
+      - name: Lint api-gateway
+        run: cd go-services/api-gateway && golangci-lint run ./...
+      - name: Lint message-consumer
+        run: cd go-services/message-consumer && golangci-lint run ./...
+      - name: Lint media-service
+        run: cd go-services/media-service && golangci-lint run ./...
+
+  lint-python:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint Python
+        run: ruff check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - name: Check formatting
+        run: ruff format --check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+
+  lint-frontend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: cd frontend && npm ci
+      - name: Lint
+        run: cd frontend && npx eslint .
+
+  lint-sql:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-sql == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install sqlfluff
+        run: pip install sqlfluff
+      - name: Lint SQL
+        run: sqlfluff lint supabase/migrations/*.sql
+
+  lint-yaml:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-yaml == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Lint YAML
+        run: yamllint -c .yamllint.yml .
+
+  lint-k8s:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-k8s == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Validate K8s manifests
+        run: >-
+          kubeconform
+          --schema-location default
+          --skip FlinkDeployment,SparkApplication,ScaledObject
+          --strict
+          kubernetes/*.yaml
+          kubernetes/go-services/*.yaml
+
+  lint-markdown:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: '**/*.md'
+
+  lint-mermaid:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-mermaid == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate Mermaid diagrams
+        run: npx -y @probelabs/maid docs/architecture/
+
+  check-types-python:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install mypy
+        run: pip install mypy
+      - name: Type check
+        run: mypy --ignore-missing-imports pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+
   build-push-api-gateway:
-    needs: [detect-changes, test-go]
+    needs: [detect-changes, test-go, lint-go]
     if: >-
       github.event_name == 'push' &&
       needs.detect-changes.outputs.api-gateway == 'true'
@@ -127,7 +292,7 @@ jobs:
             ghcr.io/${{ github.repository }}/api-gateway:latest
 
   build-push-message-consumer:
-    needs: [detect-changes, test-go]
+    needs: [detect-changes, test-go, lint-go]
     if: >-
       github.event_name == 'push' &&
       needs.detect-changes.outputs.message-consumer == 'true'
@@ -151,7 +316,7 @@ jobs:
             ghcr.io/${{ github.repository }}/message-consumer:latest
 
   build-push-media-service:
-    needs: [detect-changes, test-go]
+    needs: [detect-changes, test-go, lint-go]
     if: >-
       github.event_name == 'push' &&
       needs.detect-changes.outputs.media-service == 'true'
@@ -175,7 +340,7 @@ jobs:
             ghcr.io/${{ github.repository }}/media-service:latest
 
   build-push-spark:
-    needs: [detect-changes, test-spark]
+    needs: [detect-changes, test-spark, lint-python]
     if: >-
       github.event_name == 'push' &&
       (needs.detect-changes.outputs.spark-identity == 'true' ||
