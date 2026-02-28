@@ -14,6 +14,7 @@ Custom skills live in `.claude/skills/<name>/SKILL.md`:
 - `/agent-team` — cost-effective multi-agent orchestration with model selection
 - `/bug-fix` — orchestrated diagnosis and fix with review gates
 - `/ship` — group dirty working tree into sequential PRs
+- `/pr` — push changes to a branch, open a PR, wait for CI, then merge
 - `/mermaid-to-svg` — convert `.mmd` to `.svg` via CLI
 
 ## Domain Boundaries (DDD)
