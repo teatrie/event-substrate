@@ -27,18 +27,6 @@ tasks:
             esac
           fi
         done
-      - |
-        for tool in golangci-lint ruff sqlfluff yamllint kubeconform; do
-          if ! command -v $tool &> /dev/null; then
-            case $tool in
-              golangci-lint) brew install golangci-lint ;;
-              ruff) brew install ruff ;;
-              sqlfluff) pip install sqlfluff ;;
-              yamllint) pip install yamllint ;;
-              kubeconform) brew install kubeconform ;;
-            esac
-          fi
-        done
 
   # ---------------------------------------------------------------------------
   # Build (change-detected)
@@ -80,6 +68,49 @@ tasks:
   build:
     desc: Build all Go service images (only if source changed)
     deps: [build:gateway, build:consumer, build:media-service]
+
+  # ---------------------------------------------------------------------------
+  # Builder Images (containerized builds)
+  # ---------------------------------------------------------------------------
+  build:go-builder:
+    desc: Build Go builder image
+    internal: true
+    sources: [docker/builders/Dockerfile.go-builder]
+    cmds:
+      - docker build -t event-substrate/go-builder:local -f docker/builders/Dockerfile.go-builder docker/builders/
+
+  build:pyflink-builder:
+    internal: true
+    sources: [docker/builders/Dockerfile.pyflink-builder]
+    cmds:
+      - docker build -t event-substrate/pyflink-builder:local -f docker/builders/Dockerfile.pyflink-builder docker/builders/
+
+  build:pyspark-builder:
+    internal: true
+    sources: [docker/builders/Dockerfile.pyspark-builder]
+    cmds:
+      - docker build -t event-substrate/pyspark-builder:local -f docker/builders/Dockerfile.pyspark-builder docker/builders/
+
+  build:frontend-builder:
+    internal: true
+    sources: [docker/builders/Dockerfile.frontend-builder]
+    cmds:
+      - docker build -t event-substrate/frontend-builder:local -f docker/builders/Dockerfile.frontend-builder docker/builders/
+
+  build:infra-lint:
+    internal: true
+    sources: [docker/builders/Dockerfile.infra-lint]
+    cmds:
+      - docker build -t event-substrate/infra-lint:local -f docker/builders/Dockerfile.infra-lint docker/builders/
+
+  build:builders:
+    desc: Build all builder images
+    cmds:
+      - task: build:go-builder
+      - task: build:pyflink-builder
+      - task: build:pyspark-builder
+      - task: build:frontend-builder
+      - task: build:infra-lint
 
   # ---------------------------------------------------------------------------
   # Infrastructure
@@ -441,11 +472,15 @@ tasks:
     deps: [spark:build:base, spark:build:identity]
 
   spark:test:
-    desc: Run Spark job unit tests (local PySpark)
-    dir: pyspark_apps
+    desc: Run Spark job unit tests (containerized)
+    deps: [build:pyspark-builder]
     cmds:
-      - pip install -e '.[test]' -q
-      - pytest -v
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace
+        -w /workspace
+        event-substrate/pyspark-builder:local
+        python3 -m pytest pyspark_apps/ -v
 
   spark:test:docker:
     desc: Run Spark job unit tests in Docker (exact production base + pytest)
@@ -512,7 +547,7 @@ tasks:
       - >-
         helm upgrade --install kube-state-metrics prometheus-community/kube-state-metrics
         --namespace kube-system
-        -f kubernetes/kube-state-metrics-values.yaml
+        -f kubernetes/helm-values/kube-state-metrics-values.yaml
 
   telemetry:kube-metrics:purge:
     desc: Uninstall kube-state-metrics
@@ -520,40 +555,87 @@ tasks:
       - helm uninstall kube-state-metrics -n kube-system 2>/dev/null || true
 
   # ---------------------------------------------------------------------------
-  # Linting & Code Quality
+  # Linting & Code Quality (containerized)
   # ---------------------------------------------------------------------------
   lint:go:
-    desc: Run golangci-lint on all Go services
+    desc: Run golangci-lint on all Go services (containerized)
+    deps: [build:go-builder]
     cmds:
-      - cd go-services/api-gateway && golangci-lint run ./...
-      - cd go-services/message-consumer && golangci-lint run ./...
-      - cd go-services/media-service && golangci-lint run ./...
+      - |
+        for svc in api-gateway message-consumer media-service; do
+          docker run --rm \
+            -v {{.ROOT_DIR}}:/workspace \
+            -v event-substrate-gomod:/go/pkg/mod \
+            -w /workspace/go-services/$svc \
+            event-substrate/go-builder:local \
+            sh -c "go mod download -x 2>/dev/null && golangci-lint run ./..."
+        done
 
   lint:python:
     desc: Run ruff linter on all Python code
     cmds:
-      - ruff check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - task: lint:python:flink
+      - task: lint:python:spark
 
-  lint:frontend:
-    desc: Run ESLint on frontend code
-    dir: frontend
-    cmds:
-      - npx eslint .
-
-  lint:sql:
-    desc: Run sqlfluff on Supabase migrations (Flink SQL skipped — no dialect support)
-    cmds:
-      - sqlfluff lint supabase/migrations/*.sql
-
-  lint:yaml:
-    desc: Run yamllint on all YAML files
-    cmds:
-      - yamllint -c .yamllint.yml .
-
-  lint:k8s:
-    desc: Validate Kubernetes manifests with kubeconform
+  lint:python:flink:
+    desc: Lint PyFlink code (Python 3.10 target)
+    deps: [build:pyflink-builder]
     cmds:
       - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace:ro
+        -w /workspace
+        event-substrate/pyflink-builder:local
+        ruff check --no-cache --target-version py310 flink_jobs/ pyflink_jobs/
+
+  lint:python:spark:
+    desc: Lint PySpark/Airflow code (Python 3.12 target)
+    deps: [build:pyspark-builder]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace:ro
+        -w /workspace
+        event-substrate/pyspark-builder:local
+        ruff check --no-cache pyspark_apps/ airflow/dags/
+
+  lint:frontend:
+    desc: Run ESLint on frontend code (containerized)
+    deps: [build:frontend-builder]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npx eslint ."
+
+  lint:sql:
+    desc: Run sqlfluff on Supabase migrations (containerized)
+    deps: [build:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        sqlfluff lint supabase/migrations/*.sql
+
+  lint:yaml:
+    desc: Run yamllint on all YAML files (containerized)
+    deps: [build:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        yamllint -c .yamllint.yml .
+
+  lint:k8s:
+    desc: Validate Kubernetes manifests with kubeconform (containerized)
+    deps: [build:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
         kubeconform
         --schema-location default
         --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
@@ -568,14 +650,31 @@ tasks:
       - docker compose config -q
 
   lint:markdown:
-    desc: Run markdownlint on all project Markdown files
+    desc: Run markdownlint on all project Markdown files (containerized)
+    deps: [build:infra-lint]
     cmds:
-      - npx -y markdownlint-cli2 '**/*.md'
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        markdownlint-cli2 '**/*.md'
 
   lint:mermaid:
-    desc: Validate Mermaid diagram syntax
+    desc: Validate Mermaid diagram syntax (containerized)
+    deps: [build:infra-lint]
     cmds:
-      - npx -y @probelabs/maid docs/architecture/
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        maid docs/architecture/
+
+  lint:helm:
+    desc: Lint Helm chart (containerized)
+    deps: [build:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        helm lint charts/event-substrate/
 
   lint:
     desc: Run all linters
@@ -591,23 +690,73 @@ tasks:
 
   lint:fix:
     desc: Auto-fix lint violations where possible
+    deps: [build:pyflink-builder, build:pyspark-builder, build:frontend-builder, build:infra-lint]
     cmds:
-      - ruff check --fix pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
-      - ruff format pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
-      - cd frontend && npx eslint --fix .
-      - sqlfluff fix supabase/migrations/*.sql --force
-      - npx -y markdownlint-cli2 --fix '**/*.md'
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/pyflink-builder:local
+        sh -c "ruff check --fix --target-version py310 flink_jobs/ pyflink_jobs/ && ruff format flink_jobs/ pyflink_jobs/"
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/pyspark-builder:local
+        sh -c "ruff check --fix pyspark_apps/ airflow/dags/ && ruff format pyspark_apps/ airflow/dags/"
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npx eslint --fix ."
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/infra-lint:local
+        sqlfluff fix supabase/migrations/*.sql --force
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/infra-lint:local
+        markdownlint-cli2 --fix '**/*.md'
 
   check:types:
     desc: Run type checking on Python code
     cmds:
-      - mypy --ignore-missing-imports --explicit-package-bases pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - task: check:types:flink
+      - task: check:types:spark
+
+  check:types:flink:
+    deps: [build:pyflink-builder]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyflink-builder:local
+        mypy --cache-dir /tmp/.mypy_cache --python-version 3.10 --ignore-missing-imports --explicit-package-bases flink_jobs/ pyflink_jobs/
+
+  check:types:spark:
+    deps: [build:pyspark-builder]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyspark-builder:local
+        mypy --cache-dir /tmp/.mypy_cache --ignore-missing-imports --explicit-package-bases pyspark_apps/ airflow/dags/
 
   check:security:
     desc: Run security-focused checks
+    deps: [build:pyflink-builder, build:pyspark-builder, build:frontend-builder]
     cmds:
-      - ruff check --select S pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
-      - cd frontend && npm audit --audit-level=high || true
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyflink-builder:local
+        ruff check --select S --target-version py310 flink_jobs/ pyflink_jobs/
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyspark-builder:local
+        ruff check --select S pyspark_apps/ airflow/dags/
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npm audit --audit-level=high || true"
 
   check:
     desc: Run all linters and type checks
@@ -694,6 +843,23 @@ tasks:
       - task: spark:purge
       - task: clean
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
+
+  # ---------------------------------------------------------------------------
+  # Go Unit Tests (containerized)
+  # ---------------------------------------------------------------------------
+  test:go:
+    desc: Run Go unit tests (containerized)
+    deps: [build:go-builder]
+    cmds:
+      - |
+        for svc in api-gateway message-consumer media-service; do
+          docker run --rm \
+            -v {{.ROOT_DIR}}:/workspace \
+            -v event-substrate-gomod:/go/pkg/mod \
+            -w /workspace/go-services/$svc \
+            event-substrate/go-builder:local \
+            sh -c "go mod download -x 2>/dev/null && go test ./..."
+        done
 
   # ---------------------------------------------------------------------------
   # E2E Testing

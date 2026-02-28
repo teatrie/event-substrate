@@ -2,6 +2,8 @@
 
 ## Conventions
 
+**Go version:** All Go services MUST be pinned to the same Go version — currently **1.26.0**. This applies to `go.mod` (`go` directive), Dockerfiles (`FROM golang:`), and any builder images. When upgrading Go, update all services simultaneously in a single commit. Never let versions drift between services.
+
 **Config:** Use `spf13/viper` mapped to `Config{}` structs — never raw `os.Getenv` calls. Exception: `api-gateway/main.go` uses `os.Getenv` for SASL fields. Viper requires `SetDefault()` for all Config struct fields or they won't bind from env vars.
 
 **Libraries:** `hamba/avro`, `twmb/franz-go`, `lib/pq` — no ORMs. Kafka consumer failures must crash the pod (`log.Fatalf`) to prevent offset advancement and silent data loss.

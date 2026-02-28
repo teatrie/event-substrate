@@ -29,6 +29,7 @@ jobs:
       any-k8s: ${{ steps.filter.outputs.any-k8s }}
       any-docs: ${{ steps.filter.outputs.any-docs }}
       any-mermaid: ${{ steps.filter.outputs.any-mermaid }}
+      builders: ${{ steps.filter.outputs.builders }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -83,16 +84,20 @@ jobs:
               - '.markdownlint-cli2.yaml'
             any-mermaid:
               - 'docs/architecture/*.mmd'
+            builders:
+              - 'docker/builders/**'
 
+  # ---------------------------------------------------------------------------
+  # Tests (containerized)
+  # ---------------------------------------------------------------------------
   test-go:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-go == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/go-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
       - name: Test api-gateway
         if: needs.detect-changes.outputs.api-gateway == 'true'
         run: cd go-services/api-gateway && go test ./...
@@ -107,123 +112,99 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-spark == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/pyspark-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-      - name: Install and test
-        working-directory: pyspark_apps
-        run: |
-          pip install -e '.[test]'
-          pytest -v
+      - run: python3 -m pytest pyspark_apps/ -v
 
+  # ---------------------------------------------------------------------------
+  # Lint (containerized)
+  # ---------------------------------------------------------------------------
   lint-helm:
     needs: detect-changes
     if: needs.detect-changes.outputs.helm == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-      - name: Lint Helm chart
-        run: helm lint charts/event-substrate/
+      - run: helm lint charts/event-substrate/
 
   lint-go:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-go == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/go-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          working-directory: go-services/api-gateway
-      - name: Lint api-gateway
-        run: cd go-services/api-gateway && golangci-lint run ./...
-      - name: Lint message-consumer
-        run: cd go-services/message-consumer && golangci-lint run ./...
-      - name: Lint media-service
-        run: cd go-services/media-service && golangci-lint run ./...
+      - run: |
+          for svc in api-gateway message-consumer media-service; do
+            cd go-services/$svc && golangci-lint run ./... && cd ../..
+          done
 
-  lint-python:
+  lint-python-flink:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-python == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/pyflink-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install ruff
-        run: pip install ruff
-      - name: Lint Python
-        run: ruff check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
-      - name: Check formatting
-        run: ruff format --check pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - run: ruff check --target-version py310 flink_jobs/ pyflink_jobs/
+      - run: ruff format --check --target-version py310 flink_jobs/ pyflink_jobs/
+
+  lint-python-spark:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-python == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/pyspark-builder:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ruff check pyspark_apps/ airflow/dags/
+      - run: ruff format --check pyspark_apps/ airflow/dags/
 
   lint-frontend:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/frontend-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install dependencies
-        run: cd frontend && npm ci
-      - name: Lint
-        run: cd frontend && npx eslint .
+      - run: cd frontend && npm ci && npx eslint .
 
   lint-sql:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-sql == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install sqlfluff
-        run: pip install sqlfluff
-      - name: Lint SQL
-        run: sqlfluff lint supabase/migrations/*.sql
+      - run: sqlfluff lint supabase/migrations/*.sql
 
   lint-yaml:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-yaml == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install yamllint
-        run: pip install yamllint
-      - name: Lint YAML
-        run: yamllint -c .yamllint.yml .
+      - run: yamllint -c .yamllint.yml .
 
   lint-k8s:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-k8s == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install kubeconform
-        run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
-          sudo mv kubeconform /usr/local/bin/
-      - name: Validate K8s manifests
-        run: >-
+      - run: >-
           kubeconform
           --schema-location default
           --skip FlinkDeployment,SparkApplication,ScaledObject
@@ -235,38 +216,48 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-docs == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DavidAnson/markdownlint-cli2-action@v19
-        with:
-          globs: '**/*.md'
+      - run: markdownlint-cli2 '**/*.md'
 
   lint-mermaid:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-mermaid == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/infra-lint:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Validate Mermaid diagrams
-        run: npx -y @probelabs/maid docs/architecture/
+      - run: maid docs/architecture/
 
-  check-types-python:
+  # ---------------------------------------------------------------------------
+  # Type Checks (containerized)
+  # ---------------------------------------------------------------------------
+  check-types-python-flink:
     needs: detect-changes
     if: needs.detect-changes.outputs.any-python == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/pyflink-builder:latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install mypy
-        run: pip install mypy
-      - name: Type check
-        run: mypy --ignore-missing-imports pyspark_apps/ pyflink_jobs/ flink_jobs/ airflow/dags/
+      - run: mypy --python-version 3.10 --ignore-missing-imports --explicit-package-bases flink_jobs/ pyflink_jobs/
 
+  check-types-python-spark:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-python == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/pyspark-builder:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mypy --ignore-missing-imports --explicit-package-bases pyspark_apps/ airflow/dags/
+
+  # ---------------------------------------------------------------------------
+  # Build & Push (unchanged — uses production Dockerfiles)
+  # ---------------------------------------------------------------------------
   build-push-api-gateway:
     needs: [detect-changes, test-go, lint-go]
     if: >-
@@ -340,7 +331,7 @@ jobs:
             ghcr.io/${{ github.repository }}/media-service:latest
 
   build-push-spark:
-    needs: [detect-changes, test-spark, lint-python]
+    needs: [detect-changes, test-spark, lint-python-spark]
     if: >-
       github.event_name == 'push' &&
       (needs.detect-changes.outputs.spark-identity == 'true' ||
