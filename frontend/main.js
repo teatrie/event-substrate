@@ -1,6 +1,6 @@
 import './style.css'
 import { createClient } from '@supabase/supabase-js'
-import { requestUploadUrl, uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError, requestDownloadUrl, deleteFile, requestUploadIntent, requestDownloadIntent, requestDeleteIntent, createNotificationWaiter } from './media.js'
+import { uploadFileToStorage, fetchUserFiles, formatFileSize, isAllowedMediaType, getMediaCategory, InsufficientCreditsError, requestUploadIntent, requestDownloadIntent, requestDeleteIntent, createNotificationWaiter } from './media.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -33,7 +33,6 @@ const messageInput = document.getElementById('message-input')
 const sendBtn = document.getElementById('send-message-btn')
 
 // Media DOM Elements
-const mediaSection = document.getElementById('media-section')
 const creditCount = document.getElementById('credit-count')
 const creditBadge = document.getElementById('credit-badge')
 const uploadForm = document.getElementById('upload-form')
@@ -88,8 +87,8 @@ authForm.addEventListener('submit', async (e) => {
 
     try {
         if (isSignupMode) {
-            const { data, error } = await supabase.auth.signUp({ email, password })
-            if (error) throw error
+            const { error: signUpError } = await supabase.auth.signUp({ email, password })
+            if (signUpError) throw signUpError
             showAlert('Signup successful! Check your email or try logging in.', 'success')
             // Switch back to login mode after 2 seconds
             setTimeout(() => {
@@ -97,8 +96,8 @@ authForm.addEventListener('submit', async (e) => {
                 passwordInput.value = ''
             }, 2000)
         } else {
-            const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-            if (error) throw error
+            const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+            if (signInError) throw signInError
             checkSession()
         }
     } catch (err) {
@@ -170,13 +169,14 @@ async function refreshCredits() {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) return 0
 
-        const { data, error } = await supabase
+        const { data: creditData, error: creditError } = await supabase
             .from('user_credit_balances')
             .select('balance')
             .eq('user_id', session.user.id)
             .maybeSingle()
 
-        const balance = data?.balance ?? 0
+        if (creditError) throw creditError
+        const balance = creditData?.balance ?? 0
         creditCount.textContent = balance
         creditBadge.classList.toggle('empty', balance <= 0)
 
@@ -464,7 +464,7 @@ async function refreshMediaBrowser() {
 }
 
 // Pre-fetch Recent Events history from unified notifications table
-async function fetchHistory(userId) {
+async function fetchHistory(_userId) {
     const list = document.getElementById('notifications-list');
 
     // Clear the visual pane
@@ -600,7 +600,7 @@ async function checkSession() {
 }
 
 // Listen for auth state changes globally
-supabase.auth.onAuthStateChange((event, session) => {
+supabase.auth.onAuthStateChange((event, _session) => {
     if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
         checkSession()
     }

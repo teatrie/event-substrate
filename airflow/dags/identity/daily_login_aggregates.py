@@ -11,12 +11,11 @@ overwrite only the target partition for that date.
 
 from datetime import datetime
 
+from airflow import DAG
 from airflow.providers.cncf.kubernetes.operators.pod import (
     KubernetesPodOperator,
 )
 from kubernetes.client.models import V1EnvVar
-
-from airflow import DAG
 
 _NAMESPACE = "spark-apps"
 _IMAGE = "pyspark/identity-daily-login-aggregates:latest"
