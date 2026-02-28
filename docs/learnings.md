@@ -36,6 +36,7 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 - **Named volumes:** `docker volume rm event-substrate-gomod` if Go module cache becomes corrupted. Same for `event-substrate-frontend-nm`.
 - **Bootstrap:** Builder images must exist in GHCR before CI jobs can use them. Run the `builders.yml` workflow manually (`workflow_dispatch`) on first setup, or after any Dockerfile change to `docker/builders/`.
 - **Source mounting:** Lint tasks mount `:ro` (read-only) to prevent tools from modifying source. `lint:fix` mounts writable.
+- **Read-only mount cache failures:** Many tools (ruff, mypy, ESLint) write caches to the working directory by default. With `:ro` mounts this causes `Read-only file system` errors. Fix per tool: ruff needs `--no-cache`, mypy needs `--cache-dir /tmp/.mypy_cache`, ESLint/Node tools work because `node_modules` is a separate writable named volume. Any new containerized tool should be tested with `:ro` mounts and may need a cache redirect flag.
 - **Task `sources:` change detection:** Builder images only rebuild when their Dockerfile changes — `task build:go-builder` is a no-op if `Dockerfile.go-builder` hasn't changed.
 
 ---
