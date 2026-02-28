@@ -364,7 +364,13 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 
 **Decision:** When a saga transforms state (e.g., moves a file from `uploads/` to `files/`), the frontend waiter must register under the *final* path. Use multi-key registration (`[permanentPath, originalPath]`) to also match error notifications that reference the original path (e.g., `upload_expired` still carries `uploads/...`).
 
-### 29. Realtime Event Handlers Must Refresh Dependent UI State
+### 29. Browser Tests: Import Checks + Route Mocks Beat Source-Text Assertions
+
+**Observation:** A browser test fetched `/main.js` as text and used `toContain('requestDownloadIntent')` to verify wiring. When `media.js` functions were renamed, the test silently drifted — only caught by manual `task test:browser` run.
+
+**Decision:** Two replacement patterns: (1) **Import check** — `page.evaluate(() => import('/media.js'))` + assert on `Object.keys(mod)` validates exports against the live module system, not source text. (2) **Behavioral wiring test** — mock Supabase PostgREST with `page.route('**/rest/v1/media_files**')` to inject a fake file row, mock intent endpoints, reload the page so `refreshMediaBrowser()` renders a real card with real event listeners, then click buttons and assert with `page.waitForRequest()`. This catches wiring bugs (button not connected) and contract drift (wrong endpoint) without any function name strings in assertions.
+
+### 30. Realtime Event Handlers Must Refresh Dependent UI State
 
 **Observation:** `credit.balance_changed` arrived via Realtime and appeared in Live Events, but the credit badge in the header didn't update because the handler only called `addNotification()`, not `refreshCredits()`.
 
