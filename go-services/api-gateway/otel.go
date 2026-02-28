@@ -43,7 +43,7 @@ func initOTel(ctx context.Context, serviceName string) (shutdown func(context.Co
 	metricExporter, err := otlpmetricgrpc.New(ctx)
 	if err != nil {
 		// Best-effort: shut down the tracer provider before returning.
-		tp.Shutdown(ctx) //nolint:errcheck
+		tp.Shutdown(ctx) //nolint:errcheck,gosec // best-effort shutdown before returning error
 		return nil, fmt.Errorf("failed to create OTLP metric exporter: %w", err)
 	}
 

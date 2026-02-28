@@ -67,7 +67,7 @@ func (p *PostgresFileStore) VerifyOwnership(ctx context.Context, filePath, userI
 }
 
 func (p *PostgresFileStore) SoftDelete(ctx context.Context, filePath, userID string) (bool, error) {
-	result, err := p.DB.ExecContext(ctx,
+	result, err := p.DB.ExecContext(ctx, //nolint:gosec // parameterized query, not SQL injection
 		"UPDATE media_files SET status = 'deleted' WHERE file_path = $1 AND user_id = $2 AND status = 'active'",
 		filePath, userID,
 	)
@@ -83,7 +83,7 @@ func (p *PostgresFileStore) SoftDelete(ctx context.Context, filePath, userID str
 
 func (p *PostgresFileStore) GetFileMetadata(ctx context.Context, filePath, userID string) (*FileMetadata, error) {
 	var meta FileMetadata
-	err := p.DB.QueryRowContext(ctx,
+	err := p.DB.QueryRowContext(ctx, //nolint:gosec // parameterized query, not SQL injection
 		"SELECT file_path, file_name, media_type, file_size, user_id FROM media_files WHERE file_path = $1 AND user_id = $2 AND status = 'active'",
 		filePath, userID,
 	).Scan(&meta.FilePath, &meta.FileName, &meta.MediaType, &meta.FileSize, &meta.UserID)

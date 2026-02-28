@@ -68,7 +68,7 @@ var allowedMediaTypes = map[string]bool{
 func writeInsufficientCredits(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusPaymentRequired)
-	json.NewEncoder(w).Encode(map[string]string{"error": "insufficient_credits"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "insufficient_credits"})
 }
 
 // ServeHTTP handles the POST /api/v1/media/upload-url endpoint.
@@ -127,7 +127,7 @@ func (h *UploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(UploadResponse{
+	_ = json.NewEncoder(w).Encode(UploadResponse{
 		UploadURL: uploadURL,
 		FilePath:  key,
 		ExpiresIn: h.Config.StorageURLExpiry,

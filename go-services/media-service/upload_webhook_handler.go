@@ -142,5 +142,5 @@ func (h *UploadWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "No processable upload records")
+	_, _ = fmt.Fprint(w, "No processable upload records")
 }

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hamba/avro/v2"
 	_ "github.com/lib/pq"
@@ -140,7 +141,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to open db")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 
@@ -266,8 +267,9 @@ func main() {
 	otelHandler := otelhttp.NewHandler(webhookMux, "media-service")
 
 	webhookServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.WebhookPort),
-		Handler: otelHandler,
+		Addr:              fmt.Sprintf(":%d", cfg.WebhookPort),
+		Handler:           otelHandler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {

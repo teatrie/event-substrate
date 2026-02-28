@@ -222,7 +222,7 @@ func TestReadyzHandler_DBFailure_DatabaseCheckIsError(t *testing.T) {
 		t.Fatalf("expected 'checks' to be a map, got %T", body["checks"])
 	}
 
-	if checks["database"] != "error" {
+	if checks["database"] != statusError {
 		t.Errorf("expected checks['database']='error', got %q", checks["database"])
 	}
 	if checks["kafka"] != "ok" {
@@ -251,7 +251,7 @@ func TestReadyzHandler_DBFailure_StatusIsError(t *testing.T) {
 		t.Fatalf("response body is not valid JSON: %v", err)
 	}
 
-	if body["status"] != "error" {
+	if body["status"] != statusError {
 		t.Errorf("expected status='error' on failure, got %q", body["status"])
 	}
 }
@@ -297,7 +297,7 @@ func TestReadyzHandler_KafkaFailure_KafkaCheckIsError(t *testing.T) {
 		t.Fatalf("expected 'checks' to be a map, got %T", body["checks"])
 	}
 
-	if checks["kafka"] != "error" {
+	if checks["kafka"] != statusError {
 		t.Errorf("expected checks['kafka']='error', got %q", checks["kafka"])
 	}
 	if checks["database"] != "ok" {
@@ -349,7 +349,7 @@ func TestReadyzHandler_MinioFailure_MinioCheckIsError(t *testing.T) {
 		t.Fatalf("expected 'checks' to be a map, got %T", body["checks"])
 	}
 
-	if checks["minio"] != "error" {
+	if checks["minio"] != statusError {
 		t.Errorf("expected checks['minio']='error', got %q", checks["minio"])
 	}
 	if checks["database"] != "ok" {
@@ -388,7 +388,7 @@ func TestReadyzHandler_AllFail_AllChecksAreError(t *testing.T) {
 	}
 
 	for _, key := range []string{"kafka", "database", "minio"} {
-		if checks[key] != "error" {
+		if checks[key] != statusError {
 			t.Errorf("expected checks[%q]='error', got %q", key, checks[key])
 		}
 	}
@@ -402,7 +402,7 @@ func TestReadyzHandler_UsesRealDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open error: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Verify sqlDBPinger wraps *sql.DB correctly
 	pinger := &sqlDBPinger{db: db}

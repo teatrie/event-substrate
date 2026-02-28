@@ -134,7 +134,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to open db")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := db.Ping(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to ping db")
 	}

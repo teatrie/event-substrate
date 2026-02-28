@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const contentTypeJSON = "application/json"
+
 // ---------------------------------------------------------------------------
 // /healthz tests
 // ---------------------------------------------------------------------------
@@ -27,7 +29,7 @@ func TestHealthz_ReturnsJSON(t *testing.T) {
 	healthzHandler(rr, req)
 
 	ct := rr.Header().Get("Content-Type")
-	if ct != "application/json" {
+	if ct != contentTypeJSON {
 		t.Errorf("expected Content-Type 'application/json', got %q", ct)
 	}
 }
@@ -132,7 +134,7 @@ func TestReadyz_ReturnsJSON(t *testing.T) {
 	handler(rr, req)
 
 	ct := rr.Header().Get("Content-Type")
-	if ct != "application/json" {
+	if ct != contentTypeJSON {
 		t.Errorf("expected Content-Type 'application/json', got %q", ct)
 	}
 }
@@ -146,7 +148,7 @@ func TestReadyz_Returns503JSONWhenNotReady(t *testing.T) {
 	handler(rr, req)
 
 	ct := rr.Header().Get("Content-Type")
-	if ct != "application/json" {
+	if ct != contentTypeJSON {
 		t.Errorf("expected Content-Type 'application/json' for 503, got %q", ct)
 	}
 }

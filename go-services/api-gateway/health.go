@@ -25,7 +25,7 @@ func (k *kafkaReadinessChecker) IsReady() bool {
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // readyzHandler returns a handler for GET /readyz that delegates readiness
@@ -36,10 +36,10 @@ func readyzHandler(checker ReadinessChecker) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		if checker.IsReady() {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "not_ready"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "not_ready"})
 		}
 	}
 }

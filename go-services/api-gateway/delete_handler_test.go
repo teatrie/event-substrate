@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ func defaultDeleteHandler() (*DeleteHandler, *mockEventProducer) {
 }
 
 func validDeleteBody() string {
-	return `{"file_path":"uploads/user-123/some-uuid/photo.jpg"}`
+	return testFilePathBody
 }
 
 func doDeleteRequest(handler *DeleteHandler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {

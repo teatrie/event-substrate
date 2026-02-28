@@ -63,11 +63,11 @@ var (
 
 // fetchJWKS fetches the JWKS from a Supabase auth endpoint and extracts the EC public key.
 func fetchJWKS(jwksURL string) (*ecdsa.PublicKey, error) {
-	resp, err := http.Get(jwksURL)
+	resp, err := http.Get(jwksURL) //nolint:gosec // JWKS URL is from config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var jwks struct {
 		Keys []struct {
@@ -224,7 +224,7 @@ func encodeAvro(schemaID int, avroSchema avro.Schema, v any) ([]byte, error) {
 	buf.WriteByte(0) // Confluent Wire Format Magic Byte
 
 	idBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(idBytes, uint32(schemaID))
+	binary.BigEndian.PutUint32(idBytes, uint32(schemaID)) //nolint:gosec // Schema IDs are always positive and small
 	buf.Write(idBytes)
 
 	buf.Write(avroBytes)
@@ -546,7 +546,7 @@ func main() {
 	// http.server.request.duration and http.server.active_requests metrics + traces.
 	instrumentedHandler := otelhttp.NewHandler(corsMiddleware(mux), "api-gateway")
 
-	server := &http.Server{Addr: ":8080", Handler: instrumentedHandler}
+	server := &http.Server{Addr: ":8080", Handler: instrumentedHandler, ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {
 		log.Info().Msg("Listening for internal webhook traffic on :8080/webhooks/{topic}...")
@@ -561,5 +561,5 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	server.Shutdown(shutdownCtx)
+	_ = server.Shutdown(shutdownCtx)
 }
