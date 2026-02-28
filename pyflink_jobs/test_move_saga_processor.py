@@ -7,21 +7,24 @@ No live Flink cluster required.
 """
 
 import json
-import pytest
-from unittest.mock import MagicMock
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers: minimal PyFlink API mocks (same pattern as test_ttl_expiry_processor)
 # ---------------------------------------------------------------------------
 
+
 class MockValueState:
     def __init__(self, initial=None):
         self._value = initial
+
     def value(self):
         return self._value
+
     def update(self, v):
         self._value = v
+
     def clear(self):
         self._value = None
 
@@ -30,8 +33,10 @@ class MockTimerService:
     def __init__(self, current_time_ms=0):
         self._current_time = current_time_ms
         self.registered_timers = []
+
     def current_processing_time(self):
         return self._current_time
+
     def register_processing_time_timer(self, timestamp):
         self.registered_timers.append(timestamp)
 
@@ -40,6 +45,7 @@ class MockContext:
     def __init__(self, timer_service=None, timestamp=0):
         self._timer_service = timer_service or MockTimerService()
         self.timestamp = timestamp
+
     def timer_service(self):
         return self._timer_service
 
@@ -48,6 +54,7 @@ class MockRuntimeContext:
     def __init__(self, *states):
         self._states = list(states)
         self._call_count = 0
+
     def get_state(self, descriptor):
         state = self._states[self._call_count]
         self._call_count += 1
@@ -57,6 +64,7 @@ class MockRuntimeContext:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def received_event():
@@ -103,13 +111,16 @@ def saga_fn():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestConstants:
     def test_max_retries_is_3(self):
         from pyflink_jobs.move_saga_processor import MoveSagaFunction
+
         assert MoveSagaFunction.MAX_RETRIES == 3
 
     def test_move_timeout_is_120_seconds(self):
         from pyflink_jobs.move_saga_processor import MoveSagaFunction
+
         assert MoveSagaFunction.MOVE_TIMEOUT_SECONDS == 120
 
 

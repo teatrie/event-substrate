@@ -2,11 +2,11 @@
 
 Produces one row per user per day with login count and signup date.
 """
+
 import defopt
+from common.session import create_spark_session
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-
-from common.session import create_spark_session
 
 
 def build_output_df(login_df: DataFrame, signup_df: DataFrame, dt: str) -> DataFrame:
@@ -23,9 +23,7 @@ def build_output_df(login_df: DataFrame, signup_df: DataFrame, dt: str) -> DataF
         DataFrame with columns (user_id, login_count, signup_date, email, dt).
     """
     # 1. Filter logins to the requested date
-    daily_logins = login_df.filter(
-        F.to_date(F.col("login_time")) == F.lit(dt)
-    )
+    daily_logins = login_df.filter(F.to_date(F.col("login_time")) == F.lit(dt))
 
     # 2. Aggregate: count logins per user, keep one email
     aggregated = daily_logins.groupBy("user_id").agg(

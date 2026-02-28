@@ -11,9 +11,10 @@ ran in its own K8s pod, was scheduled, executed, and cleaned up.
 
 from datetime import datetime
 
-from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator
+
+from airflow import DAG
 
 
 def _python_hello():
@@ -37,7 +38,6 @@ with DAG(
     catchup=False,
     tags=["skeleton", "validation"],
 ) as dag:
-
     bash_hello = BashOperator(
         task_id="bash_hello",
         bash_command='echo "Hello from BashOperator on $(hostname)!"',

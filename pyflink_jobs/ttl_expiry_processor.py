@@ -15,9 +15,9 @@ upload.signed does not carry those fields (they live on upload.approved).
 Until the schema is extended, those fields default to 0 / "".
 """
 
+import json
 import logging
 import os
-import json
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -27,9 +27,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "host.docker.internal:9092")
-SCHEMA_REGISTRY_URL = os.environ.get(
-    "SCHEMA_REGISTRY_URL", "http://host.docker.internal:8081"
-)
+SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://host.docker.internal:8081")
 KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT")
 KAFKA_SASL_MECHANISM = os.environ.get("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256")
 KAFKA_SASL_USERNAME = os.environ.get("KAFKA_SASL_USERNAME", "flink-processor")
@@ -39,6 +37,7 @@ KAFKA_SASL_PASSWORD = os.environ.get("KAFKA_SASL_PASSWORD", "flink-processor-loc
 # ---------------------------------------------------------------------------
 # Shared Kafka config builder (mirrors pattern from credit_check_processor.py)
 # ---------------------------------------------------------------------------
+
 
 def build_kafka_props() -> str:
     """Return the common Kafka connector DDL properties for Redpanda with SASL."""
@@ -62,6 +61,7 @@ def build_kafka_props() -> str:
 # Core function — testable without a live Flink cluster
 # ---------------------------------------------------------------------------
 
+
 class TTLExpiryFunction:
     """
     Keyed co-process function: upload.signed (stream 1) + upload.received (stream 2).
@@ -80,8 +80,8 @@ class TTLExpiryFunction:
     def open(self, runtime_context) -> None:
         """Initialise ValueState handles via the Flink runtime context."""
         try:
-            from pyflink.datastream.state import ValueStateDescriptor
             from pyflink.common.typeinfo import Types
+            from pyflink.datastream.state import ValueStateDescriptor
 
             signed_desc = ValueStateDescriptor("signed_event", Types.STRING())
             completed_desc = ValueStateDescriptor("upload_completed", Types.BOOLEAN())
@@ -108,7 +108,9 @@ class TTLExpiryFunction:
 
         logger.debug(
             "Signed event stored for file_path=%s request_id=%s; timer at %d",
-            file_path, request_id, fire_at,
+            file_path,
+            request_id,
+            fire_at,
         )
 
     def process_element2(self, value: dict, ctx) -> None:
@@ -133,7 +135,8 @@ class TTLExpiryFunction:
 
             logger.warning(
                 "Upload TTL expired for file_path=%s request_id=%s",
-                signed.get("file_path"), signed.get("request_id"),
+                signed.get("file_path"),
+                signed.get("request_id"),
             )
 
             yield {
@@ -156,11 +159,12 @@ class TTLExpiryFunction:
 # Flink pipeline wiring (requires live cluster / pyflink installation)
 # ---------------------------------------------------------------------------
 
+
 def run_ttl_expiry_job():
-    from pyflink.datastream import StreamExecutionEnvironment, KeyedCoProcessFunction
-    from pyflink.common.typeinfo import Types
     from pyflink.common import Row
-    from pyflink.table import StreamTableEnvironment, EnvironmentSettings
+    from pyflink.common.typeinfo import Types
+    from pyflink.datastream import KeyedCoProcessFunction, StreamExecutionEnvironment
+    from pyflink.table import EnvironmentSettings, StreamTableEnvironment
 
     logging.basicConfig(level=logging.INFO)
 
@@ -236,12 +240,24 @@ def run_ttl_expiry_job():
 
     output_type = Types.ROW_NAMED(
         [
-            "user_id", "file_path", "file_name", "file_size",
-            "media_type", "request_id", "request_time", "expired_time",
+            "user_id",
+            "file_path",
+            "file_name",
+            "file_size",
+            "media_type",
+            "request_id",
+            "request_time",
+            "expired_time",
         ],
         [
-            Types.STRING(), Types.STRING(), Types.STRING(), Types.LONG(),
-            Types.STRING(), Types.STRING(), Types.STRING(), Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.LONG(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
         ],
     )
 
@@ -283,9 +299,7 @@ def run_ttl_expiry_job():
                     expired["expired_time"],
                 )
 
-    result_stream = keyed_signed.connect(keyed_events).process(
-        _FlinkTTLFunction(), output_type=output_type
-    )
+    result_stream = keyed_signed.connect(keyed_events).process(_FlinkTTLFunction(), output_type=output_type)
 
     result_table = t_env.from_data_stream(result_stream)
     t_env.create_temporary_view("expired_results", result_table)

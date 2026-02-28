@@ -12,9 +12,9 @@ MOVE_TIMEOUT_SECONDS (120s). On timer fire:
   - Only received, retry_count >= 3 → emit UploadDeadLetter → internal.media.upload.dead-letter
 """
 
+import json
 import logging
 import os
-import json
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ def build_kafka_props() -> str:
 # Core function — testable without a live Flink cluster
 # ---------------------------------------------------------------------------
 
+
 class MoveSagaFunction:
     """
     Keyed co-process function: upload.received (stream 1) + file.ready (stream 2).
@@ -71,8 +72,8 @@ class MoveSagaFunction:
 
     def open(self, runtime_context) -> None:
         try:
-            from pyflink.datastream.state import ValueStateDescriptor
             from pyflink.common.typeinfo import Types
+            from pyflink.datastream.state import ValueStateDescriptor
 
             received_desc = ValueStateDescriptor("received_event", Types.STRING())
             ready_desc = ValueStateDescriptor("file_ready", Types.BOOLEAN())
@@ -82,8 +83,9 @@ class MoveSagaFunction:
 
         self._received_state = runtime_context.get_state(received_desc)
         self._ready_state = runtime_context.get_state(ready_desc)
-        logger.info("MoveSagaFunction initialised (timeout=%ds, max_retries=%d)",
-                     self.MOVE_TIMEOUT_SECONDS, self.MAX_RETRIES)
+        logger.info(
+            "MoveSagaFunction initialised (timeout=%ds, max_retries=%d)", self.MOVE_TIMEOUT_SECONDS, self.MAX_RETRIES
+        )
 
     def _check_fast_confirm(self):
         """Fast path: if both events already present, emit confirmed immediately."""
@@ -114,8 +116,9 @@ class MoveSagaFunction:
         fire_at = timer_service.current_processing_time() + self.MOVE_TIMEOUT_SECONDS * 1000
         timer_service.register_processing_time_timer(fire_at)
 
-        logger.debug("Upload received stored for permanent_path=%s, timer at %d",
-                      value.get("permanent_path", ""), fire_at)
+        logger.debug(
+            "Upload received stored for permanent_path=%s, timer at %d", value.get("permanent_path", ""), fire_at
+        )
         return self._check_fast_confirm()
 
     def process_element2(self, value: dict, ctx):
@@ -165,8 +168,11 @@ class MoveSagaFunction:
                         "retry_count": retry_count,
                         "retry_time": now,
                     }
-                    logger.warning("Move timeout for %s, retry_count=%d — emitting retry",
-                                   received.get("permanent_path"), retry_count)
+                    logger.warning(
+                        "Move timeout for %s, retry_count=%d — emitting retry",
+                        received.get("permanent_path"),
+                        retry_count,
+                    )
                 else:
                     now = datetime.now(timezone.utc).isoformat()
                     yield {
@@ -183,8 +189,11 @@ class MoveSagaFunction:
                         "failure_reason": "max retries exceeded",
                         "dead_letter_time": now,
                     }
-                    logger.error("Move failed for %s after %d retries — dead-lettering",
-                                 received.get("permanent_path"), retry_count)
+                    logger.error(
+                        "Move failed for %s after %d retries — dead-lettering",
+                        received.get("permanent_path"),
+                        retry_count,
+                    )
         finally:
             self._received_state.clear()
             self._ready_state.clear()
@@ -194,11 +203,12 @@ class MoveSagaFunction:
 # Flink pipeline wiring
 # ---------------------------------------------------------------------------
 
+
 def run_move_saga_job():
-    from pyflink.datastream import StreamExecutionEnvironment, KeyedCoProcessFunction
-    from pyflink.common.typeinfo import Types
     from pyflink.common import Row
-    from pyflink.table import StreamTableEnvironment, EnvironmentSettings
+    from pyflink.common.typeinfo import Types
+    from pyflink.datastream import KeyedCoProcessFunction, StreamExecutionEnvironment
+    from pyflink.table import EnvironmentSettings, StreamTableEnvironment
 
     logging.basicConfig(level=logging.INFO)
 
@@ -305,17 +315,41 @@ def run_move_saga_job():
     ready_stream = t_env.to_data_stream(t_env.from_path("file_ready_source"))
 
     keyed_received = received_stream.key_by(lambda r: r[7])  # permanent_path
-    keyed_ready = ready_stream.key_by(lambda r: r[0])         # file_path
+    keyed_ready = ready_stream.key_by(lambda r: r[0])  # file_path
 
     # Single wide output type with _type discriminator — avoids side outputs
     # (PyFlink's on_timer context doesn't support ctx.output() for side outputs)
     saga_output_type = Types.ROW_NAMED(
-        ["_type", "user_id", "email", "file_path", "permanent_path", "file_name",
-         "file_size", "media_type", "upload_time", "retry_count", "retry_time",
-         "failure_reason", "dead_letter_time"],
-        [Types.STRING(), Types.STRING(), Types.STRING(), Types.STRING(), Types.STRING(),
-         Types.STRING(), Types.LONG(), Types.STRING(), Types.STRING(), Types.INT(),
-         Types.STRING(), Types.STRING(), Types.STRING()],
+        [
+            "_type",
+            "user_id",
+            "email",
+            "file_path",
+            "permanent_path",
+            "file_name",
+            "file_size",
+            "media_type",
+            "upload_time",
+            "retry_count",
+            "retry_time",
+            "failure_reason",
+            "dead_letter_time",
+        ],
+        [
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.LONG(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.INT(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+        ],
     )
 
     def _to_output_row(result):
@@ -345,9 +379,15 @@ def run_move_saga_job():
 
         def process_element1(self, value, ctx):
             row_dict = {
-                "user_id": value[0], "email": value[1], "file_path": value[2],
-                "file_name": value[3], "file_size": value[4], "media_type": value[5],
-                "upload_time": value[6], "permanent_path": value[7], "retry_count": value[8],
+                "user_id": value[0],
+                "email": value[1],
+                "file_path": value[2],
+                "file_name": value[3],
+                "file_size": value[4],
+                "media_type": value[5],
+                "upload_time": value[6],
+                "permanent_path": value[7],
+                "retry_count": value[8],
             }
             result = self._inner.process_element1(row_dict, ctx)
             if result:
@@ -363,9 +403,7 @@ def run_move_saga_job():
             for result in self._inner.on_timer(timestamp, ctx):
                 yield _to_output_row(result)
 
-    result_stream = keyed_received.connect(keyed_ready).process(
-        _FlinkMoveSagaFunction(), output_type=saga_output_type
-    )
+    result_stream = keyed_received.connect(keyed_ready).process(_FlinkMoveSagaFunction(), output_type=saga_output_type)
 
     # Single stream → table, route by _type discriminator
     saga_table = t_env.from_data_stream(result_stream)
