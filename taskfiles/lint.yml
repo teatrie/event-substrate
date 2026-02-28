@@ -1,0 +1,166 @@
+version: '3'
+
+includes:
+  builders:
+    taskfile: ./builders.yml
+    dir: ..
+
+tasks:
+  go:
+    desc: Run golangci-lint on all Go services (containerized)
+    deps: [builders:go]
+    cmds:
+      - |
+        for svc in api-gateway message-consumer media-service; do
+          docker run --rm \
+            -v {{.ROOT_DIR}}:/workspace \
+            -v event-substrate-gomod:/go/pkg/mod \
+            -w /workspace/go-services/$svc \
+            event-substrate/go-builder:local \
+            sh -c "go mod download -x 2>/dev/null && golangci-lint run ./..."
+        done
+
+  python:
+    desc: Run ruff linter on all Python code
+    cmds:
+      - task: python:flink
+      - task: python:spark
+
+  python:flink:
+    desc: Lint PyFlink code (Python 3.10 target)
+    deps: [builders:pyflink]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace:ro
+        -w /workspace
+        event-substrate/pyflink-builder:local
+        ruff check --no-cache --target-version py310 flink_jobs/ pyflink_jobs/
+
+  python:spark:
+    desc: Lint PySpark/Airflow code (Python 3.12 target)
+    deps: [builders:pyspark]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace:ro
+        -w /workspace
+        event-substrate/pyspark-builder:local
+        ruff check --no-cache pyspark_apps/ airflow/dags/
+
+  frontend:
+    desc: Run ESLint on frontend code (containerized)
+    deps: [builders:frontend]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npx eslint ."
+
+  sql:
+    desc: Run sqlfluff on Supabase migrations (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        sqlfluff lint supabase/migrations/*.sql
+
+  yaml:
+    desc: Run yamllint on all YAML files (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        yamllint -c .yamllint.yml .
+
+  k8s:
+    desc: Validate Kubernetes manifests with kubeconform (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        kubeconform
+        --schema-location default
+        --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+        --skip FlinkDeployment,SparkApplication,ScaledObject
+        --strict
+        kubernetes/*.yaml
+        kubernetes/go-services/*.yaml
+
+  compose:
+    desc: Validate Docker Compose files
+    cmds:
+      - docker compose config -q
+
+  markdown:
+    desc: Run markdownlint on all project Markdown files (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        markdownlint-cli2 '**/*.md'
+
+  mermaid:
+    desc: Validate Mermaid diagram syntax (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        maid docs/architecture/
+
+  helm:
+    desc: Lint Helm chart (containerized)
+    deps: [builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/infra-lint:local
+        helm lint charts/event-substrate/
+
+  all:
+    desc: Run all linters
+    cmds:
+      - task: go
+      - task: python
+      - task: frontend
+      - task: sql
+      - task: yaml
+      - task: k8s
+      - task: markdown
+      - task: mermaid
+
+  fix:
+    desc: Auto-fix lint violations where possible
+    deps: [builders:pyflink, builders:pyspark, builders:frontend, builders:infra-lint]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/pyflink-builder:local
+        sh -c "ruff check --fix --target-version py310 flink_jobs/ pyflink_jobs/ && ruff format flink_jobs/ pyflink_jobs/"
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/pyspark-builder:local
+        sh -c "ruff check --fix pyspark_apps/ airflow/dags/ && ruff format pyspark_apps/ airflow/dags/"
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npx eslint --fix ."
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/infra-lint:local
+        sqlfluff fix supabase/migrations/*.sql --force
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
+        event-substrate/infra-lint:local
+        markdownlint-cli2 --fix '**/*.md'

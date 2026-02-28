@@ -1,0 +1,74 @@
+version: '3'
+
+tasks:
+  install:
+    desc: Install Airflow on K8s via Helm (namespace, PV/PVC, chart)
+    cmds:
+      - helm repo add apache-airflow https://airflow.apache.org || true
+      - helm repo update apache-airflow
+      - kubectl create namespace airflow --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f airflow/pv-local.yaml
+      - >-
+        helm upgrade --install airflow apache-airflow/airflow
+        --namespace airflow
+        --version 1.19.0
+        -f airflow/values-local.yaml
+        --timeout 10m
+      - echo "✅ Airflow installed. Run 'task airflow:ui' to access the web UI."
+
+  upgrade:
+    desc: Upgrade Airflow Helm release with current values
+    cmds:
+      - >-
+        helm upgrade airflow apache-airflow/airflow
+        --namespace airflow
+        --version 1.19.0
+        -f airflow/values-local.yaml
+        --timeout 10m
+      - echo "✅ Airflow upgraded."
+
+  ui:
+    desc: "Port-forward Airflow API server to localhost:8280 (run in separate terminal — blocks while active)"
+    cmds:
+      - echo "🌐 Airflow UI at http://localhost:8280 (admin/admin)"
+      - echo "   This is a blocking port-forward — keep this terminal open."
+      - echo "   Press Ctrl+C to stop."
+      - kubectl port-forward svc/airflow-api-server 8280:8080 -n airflow
+
+  status:
+    desc: Show Airflow pod status
+    cmds:
+      - kubectl get pods -n airflow 2>/dev/null || echo "Airflow namespace not found"
+
+  logs:scheduler:
+    desc: Tail Airflow scheduler logs
+    cmds:
+      - kubectl logs -f deployment/airflow-scheduler -n airflow
+
+  logs:api-server:
+    desc: Tail Airflow API server logs
+    cmds:
+      - kubectl logs -f deployment/airflow-api-server -n airflow
+
+  start:
+    desc: Scale Airflow deployments back to 1
+    cmds:
+      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=1 2>/dev/null || true
+      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=1 2>/dev/null || true
+      - echo "✅ Airflow scaled up."
+
+  shutdown:
+    desc: Scale Airflow deployments to 0
+    cmds:
+      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=0 2>/dev/null || true
+      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
+      - echo "✅ Airflow scaled down."
+
+  purge:
+    desc: Uninstall Airflow — Helm release, PV/PVC, namespace
+    cmds:
+      - helm uninstall airflow -n airflow 2>/dev/null || true
+      - kubectl delete pods -n airflow --all --force --grace-period=0 2>/dev/null || true
+      - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
+      - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
+      - echo "✅ Airflow purged."

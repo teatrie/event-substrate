@@ -37,12 +37,12 @@ This platform is organized around explicit domain ownership. Violating these bou
 
 **Linting & Code Quality:** Every domain has static analysis configured. Run `task lint` (all domains) or individual `task lint:{go,python,frontend,sql,yaml,k8s,markdown,mermaid}`. Auto-fix with `task lint:fix`. Type checking via `task check:types` (Python/mypy). Security scanning via `task check:security` (ruff S rules + npm audit + gosec). Composite `task check` runs lint + type-check. Tools: golangci-lint (Go), ruff (Python), ESLint (Frontend), sqlfluff (SQL), yamllint (YAML), kubeconform (K8s), markdownlint-cli2 (Markdown), @probelabs/maid (Mermaid). TDD protocol enforces lint as a GREEN phase exit criterion.
 
-**Containerized Builds:** All lint, type-check, test, and security tasks run inside Docker builder images (`docker/builders/`). This ensures identical tool versions locally and in CI. Builder images: `go-builder` (Go 1.26 + golangci-lint v2.10.1), `pyflink-builder` (Python 3.10 + ruff + mypy), `pyspark-builder` (Python 3.12 + ruff + mypy + pyspark + pytest), `frontend-builder` (Node.js 22), `infra-lint` (yamllint, sqlfluff, kubeconform, markdownlint-cli2, maid, helm). Build all with `task build:builders`. Named volumes (`event-substrate-gomod`, `event-substrate-frontend-nm`) cache dependencies between runs. CI uses the same images from GHCR via `container:` directives. Python linting is split by runtime: `lint:python:flink` (py310) and `lint:python:spark` (py312). See `docs/learnings.md` "Containerized Builder Images" for gotchas.
+**Containerized Builds:** All lint, type-check, test, and security tasks run inside Docker builder images (`docker/builders/`). This ensures identical tool versions locally and in CI. Builder images: `go-builder` (Go 1.26 + golangci-lint v2.10.1), `pyflink-builder` (Python 3.10 + ruff + mypy), `pyspark-builder` (Python 3.12 + ruff + mypy + pyspark + pytest), `frontend-builder` (Node.js 22), `infra-lint` (yamllint, sqlfluff, kubeconform, markdownlint-cli2, maid, helm). Build all with `task builders:all`. Named volumes (`event-substrate-gomod`, `event-substrate-frontend-nm`) cache dependencies between runs. CI uses the same images from GHCR via `container:` directives. Python linting is split by runtime: `lint:python:flink` (py310) and `lint:python:spark` (py312). See `docs/learnings.md` "Containerized Builder Images" for gotchas.
 
 ## Deployment Checklist
 
-1. **Go changes:** `task build:consumer` or `task build:gateway` → `task helm:install` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
-2. **Flink SQL changes:** `task k8s:configmaps` → delete + re-apply FlinkDeployment.
+1. **Go changes:** `task go:build:consumer` or `task go:build:gateway` → `task helm:install` → `kubectl rollout restart deployment <name> -n go-microservices`. Wait ~15s.
+2. **Flink SQL changes:** `task flink:configmaps` → delete + re-apply FlinkDeployment.
 3. **Migration changes:** `supabase db reset`
 4. **MinIO webhook changes:** `docker restart minio` → re-run `scripts/setup-minio-webhook.sh`
 5. **Airflow Helm values changes:** `task airflow:upgrade`

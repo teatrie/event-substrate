@@ -6,11 +6,11 @@ Single Realtime subscription on `user_notifications`. Must REST-prefetch history
 
 Message payloads use `visibility: 'broadcast'` / `recipient_id: null` for broadcasts; `visibility: 'direct'` with a target UUID for private delivery.
 
-Media upload UI in `media.js`. Download and delete in `media.js` (`requestDownloadUrl`, `deleteFile`). Delete requires a type-to-confirm modal — user must type "delete" before confirming.
+Media upload UI in `media.js`. Download and delete in `media.js` (`requestDownloadIntent`, `requestDeleteIntent`). Delete requires a type-to-confirm modal — user must type "delete" before confirming.
 
 Tests use **vitest**. Run: `npx vitest run`
 
-Browser tests use **Playwright**. Run: `task test:browser` (requires `task frontend` running on port 5173).
+Browser tests use **Playwright**. Run: `task test:browser` (requires `task frontend:dev` running on port 5173).
 
 ## Realtime & Session Conventions
 

@@ -1,0 +1,17 @@
+version: '3'
+
+tasks:
+  kube-metrics:install:
+    desc: Install kube-state-metrics for K8s cluster observability
+    cmds:
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+      - helm repo update prometheus-community
+      - >-
+        helm upgrade --install kube-state-metrics prometheus-community/kube-state-metrics
+        --namespace kube-system
+        -f kubernetes/helm-values/kube-state-metrics-values.yaml
+
+  kube-metrics:purge:
+    desc: Uninstall kube-state-metrics
+    cmds:
+      - helm uninstall kube-state-metrics -n kube-system 2>/dev/null || true

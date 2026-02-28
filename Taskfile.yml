@@ -8,6 +8,47 @@ vars:
   SPARK_BASE_IMAGE: spark-base:latest
   SPARK_IMAGE: pyspark/identity-daily-login-aggregates:latest
 
+includes:
+  go:
+    taskfile: ./go-services/Taskfile.yml
+    dir: .
+  spark:
+    taskfile: ./pyspark_apps/Taskfile.yml
+    dir: .
+  flink:
+    taskfile: ./flink_jobs/Taskfile.yml
+    dir: .
+  frontend:
+    taskfile: ./frontend/Taskfile.yml
+    dir: frontend
+  airflow:
+    taskfile: ./airflow/Taskfile.yml
+    dir: .
+  builders:
+    taskfile: ./taskfiles/builders.yml
+    dir: .
+  infra:
+    taskfile: ./taskfiles/infra.yml
+    dir: .
+  helm:
+    taskfile: ./taskfiles/helm.yml
+    dir: .
+  lint:
+    taskfile: ./taskfiles/lint.yml
+    dir: .
+  check:
+    taskfile: ./taskfiles/check.yml
+    dir: .
+  test:
+    taskfile: ./taskfiles/test.yml
+    dir: .
+  lineage:
+    taskfile: ./taskfiles/lineage.yml
+    dir: .
+  telemetry:
+    taskfile: ./taskfiles/telemetry.yml
+    dir: .
+
 tasks:
   # ---------------------------------------------------------------------------
   # Prerequisites
@@ -29,742 +70,6 @@ tasks:
         done
 
   # ---------------------------------------------------------------------------
-  # Build (change-detected)
-  # ---------------------------------------------------------------------------
-  build:gateway:
-    desc: Build API Gateway Docker image
-    sources:
-      - go-services/api-gateway/*.go
-      - go-services/api-gateway/go.*
-      - go-services/api-gateway/Dockerfile
-    cmds:
-      - docker build -t {{.GATEWAY_IMAGE}} ./go-services/api-gateway
-
-  build:consumer:
-    desc: Build Message Consumer Docker image
-    sources:
-      - go-services/message-consumer/*.go
-      - go-services/message-consumer/go.*
-      - go-services/message-consumer/Dockerfile
-    cmds:
-      - docker build -t {{.CONSUMER_IMAGE}} ./go-services/message-consumer
-
-  build:media-service:
-    desc: Build Media Service Docker image
-    sources:
-      - go-services/media-service/*.go
-      - go-services/media-service/go.*
-      - go-services/media-service/Dockerfile
-    cmds:
-      - docker build -t {{.MEDIA_SERVICE_IMAGE}} ./go-services/media-service
-
-  build:pyflink:
-    desc: Build custom PyFlink Docker image (includes psycopg2)
-    sources:
-      - Dockerfile.pyflink
-    cmds:
-      - docker build -t {{.PYFLINK_IMAGE}} -f Dockerfile.pyflink .
-
-  build:
-    desc: Build all Go service images (only if source changed)
-    deps: [build:gateway, build:consumer, build:media-service]
-
-  # ---------------------------------------------------------------------------
-  # Builder Images (containerized builds)
-  # ---------------------------------------------------------------------------
-  build:go-builder:
-    desc: Build Go builder image
-    internal: true
-    sources: [docker/builders/Dockerfile.go-builder]
-    cmds:
-      - docker build -t event-substrate/go-builder:local -f docker/builders/Dockerfile.go-builder docker/builders/
-
-  build:pyflink-builder:
-    internal: true
-    sources: [docker/builders/Dockerfile.pyflink-builder]
-    cmds:
-      - docker build -t event-substrate/pyflink-builder:local -f docker/builders/Dockerfile.pyflink-builder docker/builders/
-
-  build:pyspark-builder:
-    internal: true
-    sources: [docker/builders/Dockerfile.pyspark-builder]
-    cmds:
-      - docker build -t event-substrate/pyspark-builder:local -f docker/builders/Dockerfile.pyspark-builder docker/builders/
-
-  build:frontend-builder:
-    internal: true
-    sources: [docker/builders/Dockerfile.frontend-builder]
-    cmds:
-      - docker build -t event-substrate/frontend-builder:local -f docker/builders/Dockerfile.frontend-builder docker/builders/
-
-  build:infra-lint:
-    internal: true
-    sources: [docker/builders/Dockerfile.infra-lint]
-    cmds:
-      - docker build -t event-substrate/infra-lint:local -f docker/builders/Dockerfile.infra-lint docker/builders/
-
-  build:builders:
-    desc: Build all builder images
-    cmds:
-      - task: build:go-builder
-      - task: build:pyflink-builder
-      - task: build:pyspark-builder
-      - task: build:frontend-builder
-      - task: build:infra-lint
-
-  # ---------------------------------------------------------------------------
-  # Infrastructure
-  # ---------------------------------------------------------------------------
-  infra:supabase:
-    desc: Start Supabase (Postgres, GoTrue, Realtime)
-    cmds:
-      - supabase start
-
-  infra:docker:
-    desc: Start Docker Compose infrastructure
-    cmds:
-      - docker compose up -d --build
-
-  wait:schema-registry:
-    desc: Wait for Schema Registry to be healthy
-    cmds:
-      - |
-        echo "⏳ Waiting for Schema Registry..."
-        max_retries=30; count=0
-        while ! curl -s http://localhost:8081 > /dev/null; do
-          count=$((count + 1))
-          if [ $count -gt $max_retries ]; then
-            echo "❌ Schema Registry failed to start in time." && exit 1
-          fi
-          sleep 2
-        done
-
-  wait:clickhouse:
-    desc: Wait for ClickHouse to be healthy
-    cmds:
-      - |
-        echo "⏳ Waiting for ClickHouse..."
-        max_retries=30; count=0
-        while ! curl -s "http://localhost:8123/ping" > /dev/null; do
-          count=$((count + 1))
-          if [ $count -gt $max_retries ]; then
-            echo "❌ ClickHouse failed to start in time." && exit 1
-          fi
-          sleep 2
-        done
-
-  # ---------------------------------------------------------------------------
-  # Authentication (idempotent)
-  # ---------------------------------------------------------------------------
-  auth:setup:
-    desc: Create Redpanda SASL users and ACLs (idempotent, runs from host)
-    cmds:
-      - bash scripts/setup-redpanda-auth.sh
-
-  # ---------------------------------------------------------------------------
-  # Schemas & Topics (idempotent)
-  # ---------------------------------------------------------------------------
-  schemas:register:
-    desc: Auto-discover and register all Avro schemas from avro/ directory
-    cmds:
-      - |
-        find avro -name "*.avsc" -type f | while read -r schema_file; do
-          topic=$(echo "$schema_file" | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
-          subject="${topic}-value"
-          SCHEMA=$(jq -c '.' "$schema_file" | jq -Rs '.')
-          RESPONSE=$(curl -s -o /dev/stderr -w "%{http_code}" -X POST \
-            "http://localhost:8081/subjects/${subject}/versions" \
-            -H "Content-Type: application/vnd.schemaregistry.v1+json" \
-            -d "{\"schema\": $SCHEMA, \"schemaType\": \"AVRO\"}")
-          if [ "$RESPONSE" -ne 200 ]; then
-            echo "❌ ${subject} failed with HTTP $RESPONSE" && exit 1
-          fi
-          echo "  ✅ ${subject}"
-        done
-      - |
-        # Subjects where Flink's avro-confluent format auto-generates schema names
-        # that differ from the pre-registered Avro record names. NONE compatibility
-        # allows Flink to register its auto-generated schema without NAME_MISMATCH.
-        for subject in \
-          internal.platform.unified.events-value \
-          public.media.upload.approved-value \
-          public.media.upload.rejected-value \
-          public.media.download.rejected-value \
-          public.media.upload.confirmed-value \
-          internal.media.upload.dead-letter-value \
-          internal.media.delete.dead-letter-value; do
-          curl -s -o /dev/null -X PUT \
-            "http://localhost:8081/config/${subject}" \
-            -H "Content-Type: application/json" \
-            -d '{"compatibility": "NONE"}'
-        done
-
-  topics:create:
-    desc: Create Kafka topics and enable Iceberg (auto-discovered from avro/)
-    cmds:
-      - |
-        SU="--user superuser --password superuser-local-pw --sasl-mechanism SCRAM-SHA-256"
-        TOPICS=$(find avro -name "*.avsc" -type f | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
-        docker exec redpanda rpk topic create $TOPICS $SU || true
-        for topic in $TOPICS; do
-          docker exec redpanda rpk topic alter-config "$topic" \
-            --set redpanda.iceberg.mode=value_schema_id_prefix $SU
-        done
-
-  # ---------------------------------------------------------------------------
-  # MinIO
-  # ---------------------------------------------------------------------------
-  minio:setup-webhook:
-    desc: Configure MinIO bucket webhook for media upload notifications
-    cmds:
-      - bash scripts/setup-minio-webhook.sh
-
-  # ---------------------------------------------------------------------------
-  # ClickHouse
-  # ---------------------------------------------------------------------------
-  clickhouse:init:
-    desc: Initialize ClickHouse tables and materialized views
-    sources:
-      - clickhouse/init.sql
-    cmds:
-      - task: wait:clickhouse
-      - docker exec -i clickhouse clickhouse-client -n < clickhouse/init.sql
-      - echo "✅ ClickHouse initialized."
-
-  # ---------------------------------------------------------------------------
-  # Kubernetes
-  # ---------------------------------------------------------------------------
-  k8s:operators:
-    desc: Install Flink Operator and KEDA
-    cmds:
-      - helm repo add flink-operator-repo https://downloads.apache.org/flink/flink-kubernetes-operator-1.14.0/ || true
-      - helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator --set webhook.create=false || echo "Flink Operator already installed."
-      - kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
-      - helm repo add kedacore https://kedacore.github.io/charts || true
-      - helm install keda kedacore/keda --namespace keda || echo "KEDA already installed."
-      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -
-
-  k8s:configmaps:
-    desc: Create Flink ConfigMaps from SQL/Python sources
-    sources:
-      - flink_jobs/*.sql
-      - flink_jobs/sql_runner.py
-      - pyflink_jobs/*.py
-    cmds:
-      - kubectl create serviceaccount flink --dry-run=client -o yaml | kubectl apply -f -
-      - >-
-        kubectl create configmap flink-sql-scripts
-        --from-file=login_events_processor.sql=flink_jobs/login_events_processor.sql
-        --from-file=signup_events_processor.sql=flink_jobs/signup_events_processor.sql
-        --from-file=signout_events_processor.sql=flink_jobs/signout_events_processor.sql
-        --from-file=unified_events_processor.sql=flink_jobs/unified_events_processor.sql
-        --from-file=credit_balance_processor.sql=flink_jobs/credit_balance_processor.sql
-        --from-file=media_notification_processor.sql=flink_jobs/media_notification_processor.sql
-        --from-file=sql_runner.py=flink_jobs/sql_runner.py
-        --dry-run=client -o yaml | kubectl apply -f -
-      - >-
-        kubectl create configmap pyflink-echo-scripts
-        --from-file=echo_processor.py=pyflink_jobs/echo_processor.py
-        --dry-run=client -o yaml | kubectl apply -f -
-      - >-
-        kubectl create configmap credit-check-scripts
-        --from-file=credit_check_processor.py=pyflink_jobs/credit_check_processor.py
-        --dry-run=client -o yaml | kubectl apply -f -
-      - >-
-        kubectl create configmap ttl-expiry-scripts
-        --from-file=ttl_expiry_processor.py=pyflink_jobs/ttl_expiry_processor.py
-        --dry-run=client -o yaml | kubectl apply -f -
-      - >-
-        kubectl create configmap move-saga-scripts
-        --from-file=move_saga_processor.py=pyflink_jobs/move_saga_processor.py
-        --dry-run=client -o yaml | kubectl apply -f -
-
-  k8s:flink:
-    desc: Deploy Flink jobs to Kubernetes
-    deps: [k8s:configmaps, build:pyflink]
-    cmds:
-      - kubectl apply -f kubernetes/flink-deployment.yaml
-      - kubectl apply -f kubernetes/pyflink-deployment.yaml
-      - kubectl apply -f kubernetes/credit-check-deployment.yaml
-      - kubectl apply -f kubernetes/ttl-expiry-deployment.yaml
-      - kubectl apply -f kubernetes/move-saga-deployment.yaml
-
-  k8s:go-services:
-    desc: Build and deploy Go microservices + Spark apps via Helm
-    deps: [build]
-    cmds:
-      - task: helm:install
-
-  # ---------------------------------------------------------------------------
-  # Airflow
-  # ---------------------------------------------------------------------------
-  airflow:install:
-    desc: Install Airflow on K8s via Helm (namespace, PV/PVC, chart)
-    cmds:
-      - helm repo add apache-airflow https://airflow.apache.org || true
-      - helm repo update apache-airflow
-      - kubectl create namespace airflow --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f airflow/pv-local.yaml
-      - >-
-        helm upgrade --install airflow apache-airflow/airflow
-        --namespace airflow
-        --version 1.19.0
-        -f airflow/values-local.yaml
-        --timeout 10m
-      - echo "✅ Airflow installed. Run 'task airflow:ui' to access the web UI."
-
-  airflow:upgrade:
-    desc: Upgrade Airflow Helm release with current values
-    cmds:
-      - >-
-        helm upgrade airflow apache-airflow/airflow
-        --namespace airflow
-        --version 1.19.0
-        -f airflow/values-local.yaml
-        --timeout 10m
-      - echo "✅ Airflow upgraded."
-
-  airflow:ui:
-    desc: "Port-forward Airflow API server to localhost:8280 (run in separate terminal — blocks while active)"
-    cmds:
-      - echo "🌐 Airflow UI at http://localhost:8280 (admin/admin)"
-      - echo "   This is a blocking port-forward — keep this terminal open."
-      - echo "   Press Ctrl+C to stop."
-      - kubectl port-forward svc/airflow-api-server 8280:8080 -n airflow
-
-  airflow:status:
-    desc: Show Airflow pod status
-    cmds:
-      - kubectl get pods -n airflow 2>/dev/null || echo "Airflow namespace not found"
-
-  airflow:logs:scheduler:
-    desc: Tail Airflow scheduler logs
-    cmds:
-      - kubectl logs -f deployment/airflow-scheduler -n airflow
-
-  airflow:logs:api-server:
-    desc: Tail Airflow API server logs
-    cmds:
-      - kubectl logs -f deployment/airflow-api-server -n airflow
-
-  airflow:start:
-    desc: Scale Airflow deployments back to 1
-    cmds:
-      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=1 2>/dev/null || true
-      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=1 2>/dev/null || true
-      - echo "✅ Airflow scaled up."
-
-  airflow:shutdown:
-    desc: Scale Airflow deployments to 0
-    cmds:
-      - kubectl scale deployment airflow-scheduler airflow-api-server airflow-dag-processor -n airflow --replicas=0 2>/dev/null || true
-      - kubectl scale statefulset airflow-triggerer -n airflow --replicas=0 2>/dev/null || true
-      - echo "✅ Airflow scaled down."
-
-  airflow:purge:
-    desc: Uninstall Airflow — Helm release, PV/PVC, namespace
-    cmds:
-      - helm uninstall airflow -n airflow 2>/dev/null || true
-      - kubectl delete pods -n airflow --all --force --grace-period=0 2>/dev/null || true
-      - kubectl delete -f airflow/pv-local.yaml --ignore-not-found 2>/dev/null || true
-      - kubectl delete namespace airflow --ignore-not-found 2>/dev/null || true
-      - echo "✅ Airflow purged."
-
-  # ---------------------------------------------------------------------------
-  # Batch Layer (Airflow + Spark + Lineage — one-stop setup)
-  # ---------------------------------------------------------------------------
-  batch:up:
-    desc: Install and start the full batch layer (Airflow, Spark Operator, Marquez)
-    cmds:
-      - task: spark:install
-      - task: airflow:install
-      - task: lineage:start
-      - bash scripts/setup-marquez.sh
-      - echo ""
-      - echo "✅ Batch layer ready."
-      - echo "  Airflow UI{{":"}}  task airflow:ui → http://localhost:8280 (admin/admin)"
-      - echo "  Marquez UI{{":"}}  http://localhost:3001"
-      - echo "  Spark{{":"}}       task spark:build → task spark:submit"
-
-  batch:down:
-    desc: Stop the batch layer (scale Airflow to 0, stop Marquez, delete SparkApplications)
-    cmds:
-      - task: airflow:shutdown
-      - task: lineage:shutdown
-      - kubectl delete sparkapplications --all -A --ignore-not-found 2>/dev/null || true
-      - echo "✅ Batch layer stopped."
-
-  batch:purge:
-    desc: Destroy all batch layer state (Airflow, Spark Operator, Marquez)
-    cmds:
-      - task: airflow:purge
-      - task: spark:purge
-      - task: lineage:purge
-      - echo "✅ Batch layer purged."
-
-  # ---------------------------------------------------------------------------
-  # Helm Chart (Go services + Spark apps)
-  # ---------------------------------------------------------------------------
-  helm:template:
-    desc: Render Helm chart templates (dry-run validation)
-    cmds:
-      - helm template event-substrate charts/event-substrate/
-
-  helm:install:
-    desc: Install/upgrade platform Helm chart (Go services + Spark apps)
-    cmds:
-      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl create namespace spark-apps --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl create serviceaccount spark -n spark-apps --dry-run=client -o yaml | kubectl apply -f -
-      # Adopt legacy kubectl-managed resources so Helm can take ownership.
-      # Idempotent — harmless if resources don't exist or are already Helm-managed.
-      - |
-        for resource in configmap/api-gateway-routes deployment/api-gateway deployment/message-consumer deployment/media-service service/api-gateway service/media-service scaledobject.keda.sh/message-consumer-scaledobject; do
-          kubectl annotate $resource -n go-microservices meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
-          kubectl label $resource -n go-microservices app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
-        done
-        kubectl annotate sparkapplication/daily-login-aggregates -n spark-apps meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
-        kubectl label sparkapplication/daily-login-aggregates -n spark-apps app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
-      - >-
-        helm upgrade --install event-substrate charts/event-substrate/
-
-  helm:uninstall:
-    desc: Uninstall platform Helm chart
-    cmds:
-      - helm uninstall event-substrate 2>/dev/null || true
-      - echo "✅ Helm release uninstalled."
-
-  # ---------------------------------------------------------------------------
-  # Spark
-  # ---------------------------------------------------------------------------
-  spark:install:
-    desc: Install Spark Operator on K8s via Helm
-    cmds:
-      - helm repo add spark-operator https://kubeflow.github.io/spark-operator || true
-      - helm repo update spark-operator
-      - >-
-        helm install spark-operator spark-operator/spark-operator
-        --namespace spark-operator --create-namespace
-        --set webhook.enable=false
-        --version 2.1.0
-        || echo "Spark Operator already installed."
-
-  spark:build:base:
-    desc: Build Spark base Docker image (runtime + JARs + common/)
-    sources:
-      - Dockerfile.spark.base
-      - pyspark_apps/common/**/*.py
-      - pyspark_apps/pyproject.toml
-    cmds:
-      - docker build --target base -t {{.SPARK_BASE_IMAGE}} -f Dockerfile.spark.base .
-
-  spark:build:identity:
-    desc: Build identity daily-login-aggregates Spark app image
-    deps: [spark:build:base]
-    sources:
-      - pyspark_apps/identity/**/*.py
-      - pyspark_apps/identity/**/Dockerfile
-    cmds:
-      - docker build -t {{.SPARK_IMAGE}} -f pyspark_apps/identity/daily_login_aggregates/Dockerfile .
-
-  spark:build:
-    desc: Build all Spark job images (base + per-app)
-    deps: [spark:build:base, spark:build:identity]
-
-  spark:test:
-    desc: Run Spark job unit tests (containerized)
-    deps: [build:pyspark-builder]
-    cmds:
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}:/workspace
-        -w /workspace
-        event-substrate/pyspark-builder:local
-        python3 -m pytest pyspark_apps/ -v
-
-  spark:test:docker:
-    desc: Run Spark job unit tests in Docker (exact production base + pytest)
-    cmds:
-      - docker build --target test -t spark-test:latest -f Dockerfile.spark.base .
-      - docker run --rm spark-test:latest
-
-  spark:submit:
-    desc: Submit SparkApplication to K8s (via Helm chart)
-    cmds:
-      - task: helm:install
-
-  spark:status:
-    desc: Show SparkApplication status
-    cmds:
-      - kubectl get sparkapplications -A 2>/dev/null || echo "No SparkApplications found"
-
-  spark:logs:
-    desc: Tail Spark driver logs
-    cmds:
-      - kubectl logs -f -l spark-role=driver
-
-  spark:purge:
-    desc: Uninstall Spark Operator and delete namespace
-    cmds:
-      - kubectl delete sparkapplications --all -A 2>/dev/null || true
-      - helm uninstall spark-operator -n spark-operator 2>/dev/null || true
-      - kubectl delete namespace spark-operator --ignore-not-found 2>/dev/null || true
-      - echo "✅ Spark Operator purged."
-
-  # ---------------------------------------------------------------------------
-  # Lineage (Marquez + OpenLineage)
-  # ---------------------------------------------------------------------------
-  lineage:start:
-    desc: Start Marquez lineage stack (API + Web UI + PostgreSQL)
-    cmds:
-      - docker compose -f telemetry/marquez/docker-compose.marquez.yml up -d
-      - echo "✅ Marquez started. API at http://localhost:5050, Web UI at http://localhost:3001"
-
-  lineage:ui:
-    desc: Open Marquez Web UI
-    cmds:
-      - 'open http://localhost:3001'
-
-  lineage:shutdown:
-    desc: Stop Marquez lineage stack
-    cmds:
-      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down 2>/dev/null || true
-
-  lineage:purge:
-    desc: Stop Marquez and delete all lineage data
-    cmds:
-      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down -v 2>/dev/null || true
-      - echo "✅ Marquez purged."
-
-  # ---------------------------------------------------------------------------
-  # Telemetry
-  # ---------------------------------------------------------------------------
-  telemetry:kube-metrics:install:
-    desc: Install kube-state-metrics for K8s cluster observability
-    cmds:
-      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-      - helm repo update prometheus-community
-      - >-
-        helm upgrade --install kube-state-metrics prometheus-community/kube-state-metrics
-        --namespace kube-system
-        -f kubernetes/helm-values/kube-state-metrics-values.yaml
-
-  telemetry:kube-metrics:purge:
-    desc: Uninstall kube-state-metrics
-    cmds:
-      - helm uninstall kube-state-metrics -n kube-system 2>/dev/null || true
-
-  # ---------------------------------------------------------------------------
-  # Linting & Code Quality (containerized)
-  # ---------------------------------------------------------------------------
-  lint:go:
-    desc: Run golangci-lint on all Go services (containerized)
-    deps: [build:go-builder]
-    cmds:
-      - |
-        for svc in api-gateway message-consumer media-service; do
-          docker run --rm \
-            -v {{.ROOT_DIR}}:/workspace \
-            -v event-substrate-gomod:/go/pkg/mod \
-            -w /workspace/go-services/$svc \
-            event-substrate/go-builder:local \
-            sh -c "go mod download -x 2>/dev/null && golangci-lint run ./..."
-        done
-
-  lint:python:
-    desc: Run ruff linter on all Python code
-    cmds:
-      - task: lint:python:flink
-      - task: lint:python:spark
-
-  lint:python:flink:
-    desc: Lint PyFlink code (Python 3.10 target)
-    deps: [build:pyflink-builder]
-    cmds:
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}:/workspace:ro
-        -w /workspace
-        event-substrate/pyflink-builder:local
-        ruff check --no-cache --target-version py310 flink_jobs/ pyflink_jobs/
-
-  lint:python:spark:
-    desc: Lint PySpark/Airflow code (Python 3.12 target)
-    deps: [build:pyspark-builder]
-    cmds:
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}:/workspace:ro
-        -w /workspace
-        event-substrate/pyspark-builder:local
-        ruff check --no-cache pyspark_apps/ airflow/dags/
-
-  lint:frontend:
-    desc: Run ESLint on frontend code (containerized)
-    deps: [build:frontend-builder]
-    cmds:
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}/frontend:/workspace
-        -v event-substrate-frontend-nm:/workspace/node_modules
-        -w /workspace
-        event-substrate/frontend-builder:local
-        sh -c "npm ci --prefer-offline --silent && npx eslint ."
-
-  lint:sql:
-    desc: Run sqlfluff on Supabase migrations (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        sqlfluff lint supabase/migrations/*.sql
-
-  lint:yaml:
-    desc: Run yamllint on all YAML files (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        yamllint -c .yamllint.yml .
-
-  lint:k8s:
-    desc: Validate Kubernetes manifests with kubeconform (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        kubeconform
-        --schema-location default
-        --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-        --skip FlinkDeployment,SparkApplication,ScaledObject
-        --strict
-        kubernetes/*.yaml
-        kubernetes/go-services/*.yaml
-
-  lint:compose:
-    desc: Validate Docker Compose files
-    cmds:
-      - docker compose config -q
-
-  lint:markdown:
-    desc: Run markdownlint on all project Markdown files (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        markdownlint-cli2 '**/*.md'
-
-  lint:mermaid:
-    desc: Validate Mermaid diagram syntax (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        maid docs/architecture/
-
-  lint:helm:
-    desc: Lint Helm chart (containerized)
-    deps: [build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/infra-lint:local
-        helm lint charts/event-substrate/
-
-  lint:
-    desc: Run all linters
-    cmds:
-      - task: lint:go
-      - task: lint:python
-      - task: lint:frontend
-      - task: lint:sql
-      - task: lint:yaml
-      - task: lint:k8s
-      - task: lint:markdown
-      - task: lint:mermaid
-
-  lint:fix:
-    desc: Auto-fix lint violations where possible
-    deps: [build:pyflink-builder, build:pyspark-builder, build:frontend-builder, build:infra-lint]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
-        event-substrate/pyflink-builder:local
-        sh -c "ruff check --fix --target-version py310 flink_jobs/ pyflink_jobs/ && ruff format flink_jobs/ pyflink_jobs/"
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
-        event-substrate/pyspark-builder:local
-        sh -c "ruff check --fix pyspark_apps/ airflow/dags/ && ruff format pyspark_apps/ airflow/dags/"
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}/frontend:/workspace
-        -v event-substrate-frontend-nm:/workspace/node_modules
-        -w /workspace
-        event-substrate/frontend-builder:local
-        sh -c "npm ci --prefer-offline --silent && npx eslint --fix ."
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
-        event-substrate/infra-lint:local
-        sqlfluff fix supabase/migrations/*.sql --force
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace -w /workspace
-        event-substrate/infra-lint:local
-        markdownlint-cli2 --fix '**/*.md'
-
-  check:types:
-    desc: Run type checking on Python code
-    cmds:
-      - task: check:types:flink
-      - task: check:types:spark
-
-  check:types:flink:
-    deps: [build:pyflink-builder]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/pyflink-builder:local
-        mypy --cache-dir /tmp/.mypy_cache --python-version 3.10 --ignore-missing-imports --explicit-package-bases flink_jobs/ pyflink_jobs/
-
-  check:types:spark:
-    deps: [build:pyspark-builder]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/pyspark-builder:local
-        mypy --cache-dir /tmp/.mypy_cache --ignore-missing-imports --explicit-package-bases pyspark_apps/ airflow/dags/
-
-  check:security:
-    desc: Run security-focused checks
-    deps: [build:pyflink-builder, build:pyspark-builder, build:frontend-builder]
-    cmds:
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/pyflink-builder:local
-        ruff check --select S --target-version py310 flink_jobs/ pyflink_jobs/
-      - >-
-        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
-        event-substrate/pyspark-builder:local
-        ruff check --select S pyspark_apps/ airflow/dags/
-      - >-
-        docker run --rm
-        -v {{.ROOT_DIR}}/frontend:/workspace
-        -v event-substrate-frontend-nm:/workspace/node_modules
-        -w /workspace
-        event-substrate/frontend-builder:local
-        sh -c "npm ci --prefer-offline --silent && npm audit --audit-level=high || true"
-
-  check:
-    desc: Run all linters and type checks
-    cmds:
-      - task: lint
-      - task: check:types
-
-  # ---------------------------------------------------------------------------
   # Composite Workflows
   # ---------------------------------------------------------------------------
   init:
@@ -773,15 +78,16 @@ tasks:
       - task: prereqs
       - task: infra:supabase
       - task: infra:docker
-      - task: auth:setup
-      - task: minio:setup-webhook
-      - task: wait:schema-registry
-      - task: schemas:register
-      - task: topics:create
-      - task: k8s:operators
-      - task: k8s:flink
-      - task: k8s:go-services
-      - task: clickhouse:init
+      - task: infra:auth
+      - task: infra:minio-webhook
+      - task: infra:wait:schema-registry
+      - task: infra:schemas
+      - task: infra:topics
+      - task: infra:operators
+      - task: flink:deploy
+      - task: go:build
+      - task: helm:install
+      - task: infra:clickhouse
       - echo "🎉 Initialization Complete!"
       - echo "Supabase Studio{{":"}} http://127.0.0.1:54323"
       - echo "MinIO Console{{":"}}   http://127.0.0.1:9001 (admin/password)"
@@ -795,16 +101,17 @@ tasks:
     cmds:
       - task: infra:supabase
       - task: infra:docker
-      - task: auth:setup
-      - task: minio:setup-webhook
-      - task: wait:schema-registry
-      - task: schemas:register
-      - task: topics:create
-      - task: k8s:configmaps
-      - task: k8s:flink
-      - task: k8s:go-services
+      - task: infra:auth
+      - task: infra:minio-webhook
+      - task: infra:wait:schema-registry
+      - task: infra:schemas
+      - task: infra:topics
+      - task: flink:configmaps
+      - task: flink:deploy
+      - task: go:build
+      - task: helm:install
       - task: telemetry:kube-metrics:install
-      - task: clickhouse:init
+      - task: infra:clickhouse
       - task: lineage:start
       - echo "✅ Platform is up and running!"
       - echo "Supabase Studio{{":"}} http://127.0.0.1:54323"
@@ -845,112 +152,54 @@ tasks:
       - echo "✅ Purge complete. Run 'task init' to rebuild from scratch."
 
   # ---------------------------------------------------------------------------
-  # Go Unit Tests (containerized)
+  # Batch Layer (Airflow + Spark + Lineage)
   # ---------------------------------------------------------------------------
-  test:go:
-    desc: Run Go unit tests (containerized)
-    deps: [build:go-builder]
+  batch:up:
+    desc: Install and start the full batch layer (Airflow, Spark Operator, Marquez)
     cmds:
-      - |
-        for svc in api-gateway message-consumer media-service; do
-          docker run --rm \
-            -v {{.ROOT_DIR}}:/workspace \
-            -v event-substrate-gomod:/go/pkg/mod \
-            -w /workspace/go-services/$svc \
-            event-substrate/go-builder:local \
-            sh -c "go mod download -x 2>/dev/null && go test ./..."
-        done
+      - task: spark:install
+      - task: airflow:install
+      - task: lineage:start
+      - bash scripts/setup-marquez.sh
+      - echo ""
+      - echo "✅ Batch layer ready."
+      - echo "  Airflow UI{{":"}}  task airflow:ui → http://localhost:8280 (admin/admin)"
+      - echo "  Marquez UI{{":"}}  http://localhost:3001"
+      - echo "  Spark{{":"}}       task spark:build → task spark:submit"
+
+  batch:down:
+    desc: Stop the batch layer (scale Airflow to 0, stop Marquez, delete SparkApplications)
+    cmds:
+      - task: airflow:shutdown
+      - task: lineage:shutdown
+      - kubectl delete sparkapplications --all -A --ignore-not-found 2>/dev/null || true
+      - echo "✅ Batch layer stopped."
+
+  batch:purge:
+    desc: Destroy all batch layer state (Airflow, Spark Operator, Marquez)
+    cmds:
+      - task: airflow:purge
+      - task: spark:purge
+      - task: lineage:purge
+      - echo "✅ Batch layer purged."
 
   # ---------------------------------------------------------------------------
-  # E2E Testing
+  # Aliases
   # ---------------------------------------------------------------------------
-  test:e2e:install:
-    desc: Install E2E test dependencies
-    dir: tests/e2e
-    sources:
-      - package.json
+  lint:
+    desc: Run all linters
     cmds:
-      - npm install
+      - task: lint:all
 
-  test:e2e:
-    desc: Run all end-to-end pipeline tests against user_notifications
-    deps: [test:e2e:install]
-    dir: tests/e2e
+  check:
+    desc: Run all linters and type checks
     cmds:
-      - bash run_all.sh
+      - task: lint:all
+      - task: check:types
 
-  test:e2e:signup:
-    desc: Test signup → user_notifications flow
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_signup_flow.mjs
-
-  test:e2e:login:
-    desc: Test login → user_notifications flow
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_login_flow.mjs
-
-  test:e2e:signout:
-    desc: Test signout → user_notifications flow
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_signout_flow.mjs
-
-  test:e2e:message:
-    desc: Test message POST → user_notifications flow
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_message_flow.mjs
-
-  test:e2e:rls:
-    desc: Test RLS isolation — users cannot see other users' identity events
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_rls_isolation.mjs
-
-  test:e2e:credits:
-    desc: Test signup → credit_ledger (+2 credits) + credit.balance_changed notification
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_credit_economy.mjs
-
-  test:e2e:upload:
-    desc: Test full media upload flow (presigned URL → MinIO → webhook → Flink → credit deduction)
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_media_upload.mjs
-
-  test:e2e:telemetry:
-    desc: Test telemetry pipeline — health endpoints, Prometheus targets, Grafana dashboards
-    deps: [test:e2e:install]
-    dir: tests/e2e
-    cmds:
-      - node test_telemetry_health.mjs
-
-  test:browser:install:
-    desc: Install Playwright browser test dependencies
-    dir: tests/browser
-    sources:
-      - package.json
-    cmds:
-      - npm install
-      - npx playwright install chromium
-
-  test:browser:
-    desc: Run Playwright browser UI tests (requires `task frontend` running)
-    deps: [test:browser:install]
-    dir: tests/browser
-    cmds:
-      - npx playwright test
-
+  # ---------------------------------------------------------------------------
+  # Cold-Start Regression
+  # ---------------------------------------------------------------------------
   test:cold-start:
     desc: Full cold-start regression — purge all state, rebuild from scratch, run all tests
     cmds:
@@ -1003,57 +252,6 @@ tasks:
       - echo ""
       - echo "--- Marquez (Lineage) ---"
       - 'curl -sf http://localhost:5050/api/v1/namespaces > /dev/null 2>&1 && echo "Marquez API: healthy (http://localhost:5050)" || echo "Marquez: not running"'
-
-  frontend:
-    desc: Install dependencies and start the Vite frontend dev server
-    dir: frontend
-    cmds:
-      - npm install
-      - npm run dev
-
-  logs:gateway:
-    desc: Tail API Gateway logs
-    cmds:
-      - kubectl logs -f -l app=api-gateway -n go-microservices
-
-  logs:media-service:
-    desc: Tail Media Service logs
-    cmds:
-      - kubectl logs -f -l app=media-service -n go-microservices
-
-  logs:consumer:
-    desc: Tail Message Consumer logs
-    cmds:
-      - kubectl logs -f -l app=message-consumer -n go-microservices
-
-  logs:flink:
-    desc: Tail Flink job logs
-    cmds:
-      - kubectl logs -f -l app=login-events-processor --all-containers
-
-  # ---------------------------------------------------------------------------
-  # Health Checks
-  # ---------------------------------------------------------------------------
-  health:gateway:
-    desc: Check API Gateway health
-    cmds:
-      - "echo '--- /healthz ---' && curl -s http://localhost:8080/healthz | jq ."
-      - "echo '--- /readyz ---' && curl -s http://localhost:8080/readyz | jq ."
-
-  health:media-service:
-    desc: Check Media Service health
-    cmds:
-      - "echo '--- /healthz ---' && curl -s http://localhost:8090/healthz | jq ."
-      - "echo '--- /readyz ---' && curl -s http://localhost:8090/readyz | jq ."
-
-  health:
-    desc: Check health of all Go services
-    cmds:
-      - echo "=== API Gateway ==="
-      - task: health:gateway
-      - echo ""
-      - echo "=== Media Service ==="
-      - task: health:media-service
 
   clean:
     desc: Remove build checksums (forces full rebuild on next run)

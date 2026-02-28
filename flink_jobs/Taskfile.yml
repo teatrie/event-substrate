@@ -1,0 +1,54 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build custom PyFlink Docker image (includes psycopg2)
+    sources:
+      - Dockerfile.pyflink
+    cmds:
+      - docker build -t {{.PYFLINK_IMAGE}} -f Dockerfile.pyflink .
+
+  configmaps:
+    desc: Create Flink ConfigMaps from SQL/Python sources
+    sources:
+      - flink_jobs/*.sql
+      - flink_jobs/sql_runner.py
+      - pyflink_jobs/*.py
+    cmds:
+      - kubectl create serviceaccount flink --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap flink-sql-scripts
+        --from-file=login_events_processor.sql=flink_jobs/login_events_processor.sql
+        --from-file=signup_events_processor.sql=flink_jobs/signup_events_processor.sql
+        --from-file=signout_events_processor.sql=flink_jobs/signout_events_processor.sql
+        --from-file=unified_events_processor.sql=flink_jobs/unified_events_processor.sql
+        --from-file=credit_balance_processor.sql=flink_jobs/credit_balance_processor.sql
+        --from-file=media_notification_processor.sql=flink_jobs/media_notification_processor.sql
+        --from-file=sql_runner.py=flink_jobs/sql_runner.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap pyflink-echo-scripts
+        --from-file=echo_processor.py=pyflink_jobs/echo_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap credit-check-scripts
+        --from-file=credit_check_processor.py=pyflink_jobs/credit_check_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap ttl-expiry-scripts
+        --from-file=ttl_expiry_processor.py=pyflink_jobs/ttl_expiry_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl create configmap move-saga-scripts
+        --from-file=move_saga_processor.py=pyflink_jobs/move_saga_processor.py
+        --dry-run=client -o yaml | kubectl apply -f -
+
+  deploy:
+    desc: Deploy Flink jobs to Kubernetes
+    deps: [configmaps, build]
+    cmds:
+      - kubectl apply -f kubernetes/flink-deployment.yaml
+      - kubectl apply -f kubernetes/pyflink-deployment.yaml
+      - kubectl apply -f kubernetes/credit-check-deployment.yaml
+      - kubectl apply -f kubernetes/ttl-expiry-deployment.yaml
+      - kubectl apply -f kubernetes/move-saga-deployment.yaml

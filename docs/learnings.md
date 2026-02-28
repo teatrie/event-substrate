@@ -37,7 +37,19 @@ This document captures the hard-won wisdom, "gotchas," and strategic decisions m
 - **Bootstrap:** Builder images must exist in GHCR before CI jobs can use them. Run the `builders.yml` workflow manually (`workflow_dispatch`) on first setup, or after any Dockerfile change to `docker/builders/`.
 - **Source mounting:** Lint tasks mount `:ro` (read-only) to prevent tools from modifying source. `lint:fix` mounts writable.
 - **Read-only mount cache failures:** Many tools (ruff, mypy, ESLint) write caches to the working directory by default. With `:ro` mounts this causes `Read-only file system` errors. Fix per tool: ruff needs `--no-cache`, mypy needs `--cache-dir /tmp/.mypy_cache`, ESLint/Node tools work because `node_modules` is a separate writable named volume. Any new containerized tool should be tested with `:ro` mounts and may need a cache redirect flag.
-- **Task `sources:` change detection:** Builder images only rebuild when their Dockerfile changes — `task build:go-builder` is a no-op if `Dockerfile.go-builder` hasn't changed.
+- **Task `sources:` change detection:** Builder images only rebuild when their Dockerfile changes — `task builders:go` is a no-op if `Dockerfile.go-builder` hasn't changed.
+
+### 6. Taskfile Split: Domain-Local + Cross-Cutting Includes
+
+**Observation:** The root `Taskfile.yml` grew to 1062 lines. Adding a new service or Spark app meant editing this monolith, increasing merge conflict risk and cognitive load.
+**Decision:** Split into 13 included Taskfiles using Task v3.48.0's `includes:` feature. Domain-local files live next to their code (`go-services/Taskfile.yml`, `flink_jobs/Taskfile.yml`, `pyspark_apps/Taskfile.yml`, `frontend/Taskfile.yml`, `airflow/Taskfile.yml`). Cross-cutting files live in `taskfiles/` (`builders.yml`, `infra.yml`, `helm.yml`, `lint.yml`, `check.yml`, `test.yml`, `lineage.yml`, `telemetry.yml`). Root Taskfile is now ~180 lines: vars, includes, composites (`init`, `start`, `shutdown`, `purge`, `batch:*`), aliases, and utility tasks.
+**Gotchas:**
+
+- **Cross-namespace deps:** Included Taskfiles resolve `deps:` within their own namespace. `deps: [builders:go]` in `lint.yml` (included as `lint:`) resolves to `lint:builders:go`, not root `builders:go`. Fix: add a nested `includes: { builders: { taskfile: ./builders.yml, dir: .. } }` in each cross-cutting file that needs builder deps (`lint.yml`, `check.yml`, `test.yml`). The nested builder tasks are `internal: true`, so they don't pollute `task --list`.
+- **Root tasks unreachable from includes:** Root-level tasks (`init`, `purge`, `clean`) cannot be called from included files. Tasks like `test:cold-start` that call root tasks must stay in the root Taskfile.
+- **`dir` in nested includes:** When an included file (`taskfiles/lint.yml`) includes a sibling file (`taskfiles/builders.yml`), `dir: ..` is relative to the taskfile's directory (`taskfiles/`), pointing correctly to the project root.
+- **yamllint + flow-style YAML:** Aligned flow-style includes (`{ taskfile: ..., dir: . }`) violate yamllint's `braces` and `colons` rules. Use block-style YAML for includes.
+- **`dir` defaults to entrypoint, not included file:** When an included Taskfile omits `dir:`, Task defaults to the **entrypoint** Taskfile's directory (project root), not the included file's directory. `frontend/Taskfile.yml` running `npm run dev` failed with `ENOENT: package.json` because it ran from the project root. Fix: always set `dir:` explicitly on includes whose tasks expect to run from their own directory (e.g., `frontend: { taskfile: ./frontend/Taskfile.yml, dir: frontend }`).
 
 ---
 

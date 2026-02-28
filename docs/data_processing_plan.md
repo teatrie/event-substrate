@@ -74,7 +74,7 @@ To stay within the "Developer-First" monorepo philosophy:
     * `airflow/dags/`: DAGs mirror `pyspark_apps/` domain structure (1:1 mapping). Airflow recursively scans subdirectories.
     * `Dockerfile.spark`: Multi-stage build — `production` (app only), `test` (adds pytest + fixtures).
 2. **Building**:
-    * `task spark:build` — builds production Spark image. `task spark:test` / `task spark:test:docker` — runs unit tests.
+    * `task spark:build` — builds production Spark image. `task test:spark` / `task spark:test:docker` — runs unit tests.
     * `task airflow:install` / `task airflow:upgrade` — deploys/upgrades Airflow Helm chart.
     * `task lineage:start` — starts Marquez lineage stack.
 3. **Deployment**:
