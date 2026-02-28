@@ -111,7 +111,8 @@ When extending or maintaining this platform, **strict adherence to framework and
 
 ## Directory Structure
 
-* `Taskfile.yml`: Build system definition with incremental change detection for Go services.
+* `Taskfile.yml`: Root build system orchestrator — includes domain-local Taskfiles and cross-cutting `taskfiles/*.yml`.
+* `taskfiles/`: Cross-cutting Taskfile includes (builders, infra, lint, check, test, helm, lineage, telemetry).
 * `.github/workflows/`: GitHub Actions CI (path-filtered builds + GHCR push) and deploy skeleton (staging/production).
 * `avro/`: Avro schemas organized by domain (e.g., `avro/public/identity/login.events.avsc`). Directory paths map to Kafka topic names.
 * `airflow/`: Airflow DAGs, Helm values (local + prod), and PV/PVC manifests for KubernetesExecutor deployment.
@@ -165,7 +166,7 @@ To launch the glassmorphism web UI:
 2. Run the dev server:
 
 ```bash
-task frontend
+task frontend:dev
 ```
 
 > [!NOTE]
@@ -193,34 +194,33 @@ task shutdown
 | `task shutdown` | Stop all services (K8s deployments, Docker Compose, Supabase) |
 | `task purge` | Nuclear teardown — destroy all state and volumes, then run `task init` to rebuild from scratch |
 
-**Build**
+**Go services**
 
 | Command | Description |
 |---|---|
-| `task build` | Build all Go service Docker images (change-detected — only rebuilds if source changed) |
-| `task build:gateway` | Build API Gateway image only |
-| `task build:consumer` | Build Message Consumer image only |
-| `task build:media-service` | Build Media Service image only |
-| `task build:pyflink` | Build custom PyFlink image (includes psycopg2) |
+| `task go:build` | Build all Go service Docker images (change-detected — only rebuilds if source changed) |
+| `task go:build:gateway` | Build API Gateway image only |
+| `task go:build:consumer` | Build Message Consumer image only |
+| `task go:build:media-service` | Build Media Service image only |
+
+**Flink**
+
+| Command | Description |
+|---|---|
+| `task flink:build` | Build custom PyFlink image (includes psycopg2) |
+| `task flink:configmaps` | Reload Flink SQL/Python ConfigMaps from source (required before redeploying Flink jobs) |
+| `task flink:deploy` | Deploy all Flink jobs to Kubernetes |
 
 **Infrastructure & config**
 
 | Command | Description |
 |---|---|
-| `task auth:setup` | Create Redpanda SASL users and ACLs (idempotent) |
-| `task schemas:register` | Auto-discover and register all Avro schemas from `avro/` |
-| `task topics:create` | Create Kafka topics and enable Iceberg tiered storage |
-| `task minio:setup-webhook` | Configure MinIO bucket webhooks for media upload notifications |
-| `task clickhouse:init` | Initialize ClickHouse tables and materialized views |
-
-**Kubernetes**
-
-| Command | Description |
-|---|---|
-| `task k8s:operators` | Install Flink Operator and KEDA (one-time) |
-| `task k8s:configmaps` | Reload Flink SQL/Python ConfigMaps from source (required before redeploying Flink jobs) |
-| `task k8s:flink` | Deploy all Flink jobs to Kubernetes |
-| `task k8s:go-services` | Build and deploy Go microservices to K8s |
+| `task infra:operators` | Install Flink Operator and KEDA (one-time) |
+| `task infra:auth` | Create Redpanda SASL users and ACLs (idempotent) |
+| `task infra:schemas` | Auto-discover and register all Avro schemas from `avro/` |
+| `task infra:topics` | Create Kafka topics and enable Iceberg tiered storage |
+| `task infra:minio-webhook` | Configure MinIO bucket webhooks for media upload notifications |
+| `task infra:clickhouse` | Initialize ClickHouse tables and materialized views |
 
 **Airflow**
 
@@ -252,7 +252,7 @@ task shutdown
 | `task spark:build` | Build all Spark images (base + per-app) |
 | `task spark:build:base` | Build shared Spark base image (`Dockerfile.spark.base` — runtime + JARs + common/) |
 | `task spark:build:identity` | Build identity daily-login-aggregates app image (thin layer on spark-base) |
-| `task spark:test` | Run Spark job unit tests locally (PySpark `local[*]`, fast iteration) |
+| `task test:spark` | Run Spark job unit tests (containerized via pyspark-builder) |
 | `task spark:test:docker` | Run Spark job unit tests in Docker (exact production base + pytest) |
 | `task spark:submit` | Submit SparkApplication to K8s via Helm |
 | `task spark:status` | Show SparkApplication status |
@@ -284,7 +284,7 @@ task shutdown
 | `task test:e2e:login` | Test login → user_notifications flow |
 | `task test:e2e:message` | Test message POST → user_notifications flow |
 | `task test:e2e:upload` | Test media upload saga → credit deduction → notification flow |
-| `task test:browser` | Run Playwright browser UI tests — **requires `task frontend` running in a separate terminal first** |
+| `task test:browser` | Run Playwright browser UI tests — **requires `task frontend:dev` running in a separate terminal first** |
 
 **Telemetry**
 
@@ -297,22 +297,22 @@ task shutdown
 
 | Command | Description |
 |---|---|
-| `task frontend` | Install dependencies and start Vite dev server (required before `task test:browser`) |
+| `task frontend:dev` | Install dependencies and start Vite dev server (required before `task test:browser`) |
 | `task status` | Show status of all services (Supabase, Docker, K8s pods) |
-| `task logs:gateway` | Tail API Gateway logs |
-| `task logs:consumer` | Tail Message Consumer logs |
-| `task logs:media-service` | Tail Media Service logs |
-| `task logs:flink` | Tail Flink job logs |
-| `task health` | Check health of all Go services at once |
-| `task health:gateway` | Check API Gateway health (`/healthz` + `/readyz`) |
-| `task health:media-service` | Check Media Service health (`/healthz` + `/readyz`) |
+| `task go:logs:gateway` | Tail API Gateway logs |
+| `task go:logs:consumer` | Tail Message Consumer logs |
+| `task go:logs:media-service` | Tail Media Service logs |
+| `task go:logs:flink` | Tail Flink job logs |
+| `task go:health` | Check health of all Go services at once |
+| `task go:health:gateway` | Check API Gateway health (`/healthz` + `/readyz`) |
+| `task go:health:media-service` | Check Media Service health (`/healthz` + `/readyz`) |
 | `task clean` | Clear build checksums (forces full rebuild on next `task start`) |
 
 > [!TIP]
 > **Incremental Builds:** Task tracks file checksums in `.task/`. When you modify a Go source file, only the affected service image is rebuilt on the next `task start`. To force a full rebuild, run `task clean` first.
 
 > [!NOTE]
-> **Browser Tests:** `task test:browser` runs Playwright against the live Vite dev server. You must have `task frontend` running in a separate terminal before starting the tests. The test suite exercises the full UI flow — login, media upload, credit display, notifications — against the real backend.
+> **Browser Tests:** `task test:browser` runs Playwright against the live Vite dev server. You must have `task frontend:dev` running in a separate terminal before starting the tests. The test suite exercises the full UI flow — login, media upload, credit display, notifications — against the real backend.
 
 ## Telemetry & Observability (Grafana + OpenTelemetry + Prometheus)
 

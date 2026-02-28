@@ -1,0 +1,119 @@
+version: '3'
+
+includes:
+  builders:
+    taskfile: ./builders.yml
+    dir: ..
+
+tasks:
+  go:
+    desc: Run Go unit tests (containerized)
+    deps: [builders:go]
+    cmds:
+      - |
+        for svc in api-gateway message-consumer media-service; do
+          docker run --rm \
+            -v {{.ROOT_DIR}}:/workspace \
+            -v event-substrate-gomod:/go/pkg/mod \
+            -w /workspace/go-services/$svc \
+            event-substrate/go-builder:local \
+            sh -c "go mod download -x 2>/dev/null && go test ./..."
+        done
+
+  spark:
+    desc: Run Spark job unit tests (containerized)
+    deps: [builders:pyspark]
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/workspace
+        -w /workspace
+        event-substrate/pyspark-builder:local
+        python3 -m pytest pyspark_apps/ -v
+
+  e2e:install:
+    desc: Install E2E test dependencies
+    dir: tests/e2e
+    sources:
+      - package.json
+    cmds:
+      - npm install
+
+  e2e:
+    desc: Run all end-to-end pipeline tests against user_notifications
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - bash run_all.sh
+
+  e2e:signup:
+    desc: Test signup → user_notifications flow
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_signup_flow.mjs
+
+  e2e:login:
+    desc: Test login → user_notifications flow
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_login_flow.mjs
+
+  e2e:signout:
+    desc: Test signout → user_notifications flow
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_signout_flow.mjs
+
+  e2e:message:
+    desc: Test message POST → user_notifications flow
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_message_flow.mjs
+
+  e2e:rls:
+    desc: Test RLS isolation — users cannot see other users' identity events
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_rls_isolation.mjs
+
+  e2e:credits:
+    desc: Test signup → credit_ledger (+2 credits) + credit.balance_changed notification
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_credit_economy.mjs
+
+  e2e:upload:
+    desc: Test full media upload flow (presigned URL → MinIO → webhook → Flink → credit deduction)
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_media_upload.mjs
+
+  e2e:telemetry:
+    desc: Test telemetry pipeline — health endpoints, Prometheus targets, Grafana dashboards
+    deps: [e2e:install]
+    dir: tests/e2e
+    cmds:
+      - node test_telemetry_health.mjs
+
+  browser:install:
+    desc: Install Playwright browser test dependencies
+    dir: tests/browser
+    sources:
+      - package.json
+    cmds:
+      - npm install
+      - npx playwright install chromium
+
+  browser:
+    desc: Run Playwright browser UI tests (requires `task frontend:dev` running)
+    deps: [browser:install]
+    dir: tests/browser
+    cmds:
+      - npx playwright test

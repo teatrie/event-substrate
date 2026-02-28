@@ -1,0 +1,65 @@
+version: '3'
+
+tasks:
+  install:
+    desc: Install Spark Operator on K8s via Helm
+    cmds:
+      - helm repo add spark-operator https://kubeflow.github.io/spark-operator || true
+      - helm repo update spark-operator
+      - >-
+        helm install spark-operator spark-operator/spark-operator
+        --namespace spark-operator --create-namespace
+        --set webhook.enable=false
+        --version 2.1.0
+        || echo "Spark Operator already installed."
+
+  build:base:
+    desc: Build Spark base Docker image (runtime + JARs + common/)
+    sources:
+      - Dockerfile.spark.base
+      - pyspark_apps/common/**/*.py
+      - pyspark_apps/pyproject.toml
+    cmds:
+      - docker build --target base -t {{.SPARK_BASE_IMAGE}} -f Dockerfile.spark.base .
+
+  build:identity:
+    desc: Build identity daily-login-aggregates Spark app image
+    deps: [build:base]
+    sources:
+      - pyspark_apps/identity/**/*.py
+      - pyspark_apps/identity/**/Dockerfile
+    cmds:
+      - docker build -t {{.SPARK_IMAGE}} -f pyspark_apps/identity/daily_login_aggregates/Dockerfile .
+
+  build:
+    desc: Build all Spark job images (base + per-app)
+    deps: [build:base, build:identity]
+
+  test:docker:
+    desc: Run Spark job unit tests in Docker (exact production base + pytest)
+    cmds:
+      - docker build --target test -t spark-test:latest -f Dockerfile.spark.base .
+      - docker run --rm spark-test:latest
+
+  submit:
+    desc: Submit SparkApplication to K8s (via Helm chart)
+    cmds:
+      - task helm:install
+
+  status:
+    desc: Show SparkApplication status
+    cmds:
+      - kubectl get sparkapplications -A 2>/dev/null || echo "No SparkApplications found"
+
+  logs:
+    desc: Tail Spark driver logs
+    cmds:
+      - kubectl logs -f -l spark-role=driver
+
+  purge:
+    desc: Uninstall Spark Operator and delete namespace
+    cmds:
+      - kubectl delete sparkapplications --all -A 2>/dev/null || true
+      - helm uninstall spark-operator -n spark-operator 2>/dev/null || true
+      - kubectl delete namespace spark-operator --ignore-not-found 2>/dev/null || true
+      - echo "✅ Spark Operator purged."

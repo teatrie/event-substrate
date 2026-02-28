@@ -1,0 +1,42 @@
+version: '3'
+
+tasks:
+  go:
+    desc: Build Go builder image
+    internal: true
+    sources: [docker/builders/Dockerfile.go-builder]
+    cmds:
+      - docker build -t event-substrate/go-builder:local -f docker/builders/Dockerfile.go-builder docker/builders/
+
+  pyflink:
+    internal: true
+    sources: [docker/builders/Dockerfile.pyflink-builder]
+    cmds:
+      - docker build -t event-substrate/pyflink-builder:local -f docker/builders/Dockerfile.pyflink-builder docker/builders/
+
+  pyspark:
+    internal: true
+    sources: [docker/builders/Dockerfile.pyspark-builder]
+    cmds:
+      - docker build -t event-substrate/pyspark-builder:local -f docker/builders/Dockerfile.pyspark-builder docker/builders/
+
+  frontend:
+    internal: true
+    sources: [docker/builders/Dockerfile.frontend-builder]
+    cmds:
+      - docker build -t event-substrate/frontend-builder:local -f docker/builders/Dockerfile.frontend-builder docker/builders/
+
+  infra-lint:
+    internal: true
+    sources: [docker/builders/Dockerfile.infra-lint]
+    cmds:
+      - docker build -t event-substrate/infra-lint:local -f docker/builders/Dockerfile.infra-lint docker/builders/
+
+  all:
+    desc: Build all builder images
+    cmds:
+      - task: go
+      - task: pyflink
+      - task: pyspark
+      - task: frontend
+      - task: infra-lint

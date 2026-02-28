@@ -1,0 +1,31 @@
+version: '3'
+
+tasks:
+  template:
+    desc: Render Helm chart templates (dry-run validation)
+    cmds:
+      - helm template event-substrate charts/event-substrate/
+
+  install:
+    desc: Install/upgrade platform Helm chart (Go services + Spark apps)
+    cmds:
+      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl create namespace spark-apps --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl create serviceaccount spark -n spark-apps --dry-run=client -o yaml | kubectl apply -f -
+      # Adopt legacy kubectl-managed resources so Helm can take ownership.
+      # Idempotent — harmless if resources don't exist or are already Helm-managed.
+      - |
+        for resource in configmap/api-gateway-routes deployment/api-gateway deployment/message-consumer deployment/media-service service/api-gateway service/media-service scaledobject.keda.sh/message-consumer-scaledobject; do
+          kubectl annotate $resource -n go-microservices meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
+          kubectl label $resource -n go-microservices app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+        done
+        kubectl annotate sparkapplication/daily-login-aggregates -n spark-apps meta.helm.sh/release-name=event-substrate meta.helm.sh/release-namespace=default --overwrite 2>/dev/null || true
+        kubectl label sparkapplication/daily-login-aggregates -n spark-apps app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+      - >-
+        helm upgrade --install event-substrate charts/event-substrate/
+
+  uninstall:
+    desc: Uninstall platform Helm chart
+    cmds:
+      - helm uninstall event-substrate 2>/dev/null || true
+      - echo "✅ Helm release uninstalled."

@@ -1,0 +1,24 @@
+version: '3'
+
+tasks:
+  start:
+    desc: Start Marquez lineage stack (API + Web UI + PostgreSQL)
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml up -d
+      - echo "✅ Marquez started. API at http://localhost:5050, Web UI at http://localhost:3001"
+
+  ui:
+    desc: Open Marquez Web UI
+    cmds:
+      - 'open http://localhost:3001'
+
+  shutdown:
+    desc: Stop Marquez lineage stack
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down 2>/dev/null || true
+
+  purge:
+    desc: Stop Marquez and delete all lineage data
+    cmds:
+      - docker compose -f telemetry/marquez/docker-compose.marquez.yml down -v 2>/dev/null || true
+      - echo "✅ Marquez purged."

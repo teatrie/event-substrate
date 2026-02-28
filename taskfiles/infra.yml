@@ -1,0 +1,116 @@
+version: '3'
+
+tasks:
+  supabase:
+    desc: Start Supabase (Postgres, GoTrue, Realtime)
+    cmds:
+      - supabase start
+
+  docker:
+    desc: Start Docker Compose infrastructure
+    cmds:
+      - docker compose up -d --build
+
+  wait:schema-registry:
+    desc: Wait for Schema Registry to be healthy
+    cmds:
+      - |
+        echo "⏳ Waiting for Schema Registry..."
+        max_retries=30; count=0
+        while ! curl -s http://localhost:8081 > /dev/null; do
+          count=$((count + 1))
+          if [ $count -gt $max_retries ]; then
+            echo "❌ Schema Registry failed to start in time." && exit 1
+          fi
+          sleep 2
+        done
+
+  wait:clickhouse:
+    desc: Wait for ClickHouse to be healthy
+    cmds:
+      - |
+        echo "⏳ Waiting for ClickHouse..."
+        max_retries=30; count=0
+        while ! curl -s "http://localhost:8123/ping" > /dev/null; do
+          count=$((count + 1))
+          if [ $count -gt $max_retries ]; then
+            echo "❌ ClickHouse failed to start in time." && exit 1
+          fi
+          sleep 2
+        done
+
+  auth:
+    desc: Create Redpanda SASL users and ACLs (idempotent, runs from host)
+    cmds:
+      - bash scripts/setup-redpanda-auth.sh
+
+  schemas:
+    desc: Auto-discover and register all Avro schemas from avro/ directory
+    cmds:
+      - |
+        find avro -name "*.avsc" -type f | while read -r schema_file; do
+          topic=$(echo "$schema_file" | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
+          subject="${topic}-value"
+          SCHEMA=$(jq -c '.' "$schema_file" | jq -Rs '.')
+          RESPONSE=$(curl -s -o /dev/stderr -w "%{http_code}" -X POST \
+            "http://localhost:8081/subjects/${subject}/versions" \
+            -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+            -d "{\"schema\": $SCHEMA, \"schemaType\": \"AVRO\"}")
+          if [ "$RESPONSE" -ne 200 ]; then
+            echo "❌ ${subject} failed with HTTP $RESPONSE" && exit 1
+          fi
+          echo "  ✅ ${subject}"
+        done
+      - |
+        # Subjects where Flink's avro-confluent format auto-generates schema names
+        # that differ from the pre-registered Avro record names. NONE compatibility
+        # allows Flink to register its auto-generated schema without NAME_MISMATCH.
+        for subject in \
+          internal.platform.unified.events-value \
+          public.media.upload.approved-value \
+          public.media.upload.rejected-value \
+          public.media.download.rejected-value \
+          public.media.upload.confirmed-value \
+          internal.media.upload.dead-letter-value \
+          internal.media.delete.dead-letter-value; do
+          curl -s -o /dev/null -X PUT \
+            "http://localhost:8081/config/${subject}" \
+            -H "Content-Type: application/json" \
+            -d '{"compatibility": "NONE"}'
+        done
+
+  topics:
+    desc: Create Kafka topics and enable Iceberg (auto-discovered from avro/)
+    cmds:
+      - |
+        SU="--user superuser --password superuser-local-pw --sasl-mechanism SCRAM-SHA-256"
+        TOPICS=$(find avro -name "*.avsc" -type f | sed 's|^avro/||; s|\.avsc$||; s|/|.|g')
+        docker exec redpanda rpk topic create $TOPICS $SU || true
+        for topic in $TOPICS; do
+          docker exec redpanda rpk topic alter-config "$topic" \
+            --set redpanda.iceberg.mode=value_schema_id_prefix $SU
+        done
+
+  minio-webhook:
+    desc: Configure MinIO bucket webhook for media upload notifications
+    cmds:
+      - bash scripts/setup-minio-webhook.sh
+
+  clickhouse:
+    desc: Initialize ClickHouse tables and materialized views
+    sources:
+      - clickhouse/init.sql
+    cmds:
+      - task: wait:clickhouse
+      - docker exec -i clickhouse clickhouse-client -n < clickhouse/init.sql
+      - echo "✅ ClickHouse initialized."
+
+  operators:
+    desc: Install Flink Operator and KEDA
+    cmds:
+      - helm repo add flink-operator-repo https://downloads.apache.org/flink/flink-kubernetes-operator-1.14.0/ || true
+      - helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator --set webhook.create=false || echo "Flink Operator already installed."
+      - kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
+      - helm repo add kedacore https://kedacore.github.io/charts || true
+      - helm install keda kedacore/keda --namespace keda || echo "KEDA already installed."
+      - kubectl create namespace go-microservices --dry-run=client -o yaml | kubectl apply -f -

@@ -15,7 +15,7 @@ SQL files cannot contain JAAS configs — the `;` in the JAAS string conflicts w
 
 ## Deployment
 
-Re-apply configmaps after SQL changes: `task k8s:configmaps`
+Re-apply configmaps after SQL changes: `task flink:configmaps`
 
 Then delete + re-apply the FlinkDeployment:
 

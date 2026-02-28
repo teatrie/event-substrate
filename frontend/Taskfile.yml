@@ -1,0 +1,8 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: Install dependencies and start the Vite frontend dev server
+    cmds:
+      - npm install
+      - npm run dev

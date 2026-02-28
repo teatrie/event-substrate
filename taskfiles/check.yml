@@ -1,0 +1,49 @@
+version: '3'
+
+includes:
+  builders:
+    taskfile: ./builders.yml
+    dir: ..
+
+tasks:
+  types:
+    desc: Run type checking on Python code
+    cmds:
+      - task: types:flink
+      - task: types:spark
+
+  types:flink:
+    deps: [builders:pyflink]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyflink-builder:local
+        mypy --cache-dir /tmp/.mypy_cache --python-version 3.10 --ignore-missing-imports --explicit-package-bases flink_jobs/ pyflink_jobs/
+
+  types:spark:
+    deps: [builders:pyspark]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyspark-builder:local
+        mypy --cache-dir /tmp/.mypy_cache --ignore-missing-imports --explicit-package-bases pyspark_apps/ airflow/dags/
+
+  security:
+    desc: Run security-focused checks
+    deps: [builders:pyflink, builders:pyspark, builders:frontend]
+    cmds:
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyflink-builder:local
+        ruff check --select S --target-version py310 flink_jobs/ pyflink_jobs/
+      - >-
+        docker run --rm -v {{.ROOT_DIR}}:/workspace:ro -w /workspace
+        event-substrate/pyspark-builder:local
+        ruff check --select S pyspark_apps/ airflow/dags/
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}/frontend:/workspace
+        -v event-substrate-frontend-nm:/workspace/node_modules
+        -w /workspace
+        event-substrate/frontend-builder:local
+        sh -c "npm ci --prefer-offline --silent && npm audit --audit-level=high || true"
