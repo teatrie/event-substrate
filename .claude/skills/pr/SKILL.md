@@ -39,6 +39,20 @@ If there are only unpushed commits (clean working tree):
 1. Create a branch from HEAD: `git checkout -b pr/<short-name>`
    (The branch carries the unpushed commits)
 
+## Step 2b: Pre-Push Lint Gate
+
+Before pushing, run lint checks relevant to the changed files:
+
+1. **If any `*.md` files changed:** `task lint:markdown`
+2. **If any `docs/architecture/*.mmd` files changed:** `task lint:mermaid`
+3. **If any Go files changed:** `task lint:go`
+4. **If any Python files changed:** `task lint:python:flink` and/or `task lint:python:spark` (match the runtime)
+5. **If any frontend files changed:** `task lint:frontend`
+6. **If any YAML files changed:** `task lint:yaml`
+7. **If any K8s manifests changed:** `task lint:k8s`
+
+If any lint check fails, **fix the issues before proceeding**. Do not push broken files.
+
 ## Step 3: Push & Create PR
 
 ```bash
@@ -69,15 +83,20 @@ Check whether the changed files match any CI path filter that triggers build/tes
 - `charts/**` — Helm lint
 - `flink_jobs/**` — Flink SQL changes
 
-Files that do NOT trigger any build/test job (CI-silent paths):
+Files that trigger **lint-only** CI jobs (no build/test, but still must pass):
 
-- `docs/**`, `README.md`, `CLAUDE.md`, `*.md` (documentation)
-- `.claude/**` (agent skills, config)
+- `**/*.md` (triggers `lint-markdown` via `any-docs` filter) — includes `docs/`, `.claude/skills/`, `README.md`, `CLAUDE.md`
+- `.markdownlint-cli2.yaml` (triggers `lint-markdown`)
+- `docs/architecture/*.mmd` (triggers `lint-mermaid` via `any-mermaid` filter)
+
+Files that do NOT trigger any CI job (truly CI-silent):
+
 - `avro/**` (schemas — no CI job yet)
 - `airflow/**` (DAGs — no CI job yet)
 - `supabase/**` (migrations — no CI job yet)
 - `scripts/**`, `telemetry/**`, `kubernetes/**` (infra config)
 - Root config files (`Taskfile.yml`, `docker-compose.yml`, etc.)
+- `.claude/**` non-markdown files (hooks, scripts, settings)
 
 Compare the list of changed files against the trigger paths. If **none** of the changed files match a trigger path, CI will only run the `detect-changes` job (~5 seconds) and skip all build/test/push jobs.
 
@@ -89,8 +108,13 @@ Compare the list of changed files against the trigger paths. If **none** of the 
 - **"Merge now"** — merge immediately without waiting
 - **"Leave open"** — leave the PR open for manual review
 
-**If CI is silent** (no trigger paths matched), tell the user:
-> "No build/test jobs will trigger for these changes (only docs/config files changed). Merging directly."
+**If only lint CI jobs will run** (only markdown/mermaid files changed), tell the user:
+> "Only lint jobs will trigger for these changes. The pre-push lint gate already validated them. Merging directly."
+
+Then merge immediately: `gh pr merge <number> --merge --delete-branch`
+
+**If CI is truly silent** (no trigger paths matched at all), tell the user:
+> "No CI jobs will trigger for these changes. Merging directly."
 
 Then merge immediately: `gh pr merge <number> --merge --delete-branch`
 

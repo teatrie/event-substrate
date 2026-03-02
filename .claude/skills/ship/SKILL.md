@@ -95,6 +95,22 @@ PR 3: ...
 
 ---
 
+## PHASE 1b — Pre-Push Lint Gate
+
+Before creating any branches or PRs, run lint checks relevant to the changed files:
+
+1. **If any `*.md` files changed:** `task lint:markdown`
+2. **If any `docs/architecture/*.mmd` files changed:** `task lint:mermaid`
+3. **If any Go files changed:** `task lint:go`
+4. **If any Python files changed:** `task lint:python:flink` and/or `task lint:python:spark` (match the runtime)
+5. **If any frontend files changed:** `task lint:frontend`
+6. **If any YAML files changed:** `task lint:yaml`
+7. **If any K8s manifests changed:** `task lint:k8s`
+
+If any lint check fails, **fix the issues before proceeding**. Do not push broken files.
+
+---
+
 ## PHASE 2 — Sequential Branch/Commit/PR Creation
 
 For each PR **in dependency order**:
