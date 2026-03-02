@@ -30,7 +30,8 @@ When given a feature request (or a set of remaining domains from an epic), analy
 2. **Language/service boundaries:** Identify which domains are in isolated codebases or languages.
 3. **Dependency graph:** Map which domains produce artifacts consumed by others (e.g., schemas, events, APIs).
 4. **Shared-file conflicts:** Flag domains that modify the same files or packages.
-5. **Deployment inventory:** For every new or modified service/image, verify the full deployment chain exists:
+5. **Deep research check:** If the systems analysis requires understanding a large or unfamiliar area of the codebase (>10 files, cross-cutting patterns, or unclear architecture), run `/deep-research` **now**, before forming teams. The orchestrator must do this — subagents do NOT have access to MCP tools (including `ask-gemini`). Pass validated research findings into subagent prompts as context.
+6. **Deployment inventory:** For every new or modified service/image, verify the full deployment chain exists:
    - Dockerfile → `build:*` task in Taskfile → K8s manifest in `kubernetes/` → wired into `task init`/`task start`
    - If ANY link is missing, add a **deployment domain** to the plan. Code that passes local build/test but has no deployment path is incomplete.
    - If an existing Dockerfile is modified (e.g., adding a pip/apt dependency), the image must be rebuilt — local test passing does NOT validate the container.
