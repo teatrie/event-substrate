@@ -22,6 +22,7 @@ Compare the response against the current model list stored in:
 1. **Memory** — `~/.claude/projects/-Users-kt-code-event-substrate/memory/MEMORY.md` → "Gemini Delegation for Deep Research" → "Available Gemini models" list
 2. **Deep Research skill** — `.claude/skills/deep-research/SKILL.md` → "Step 1: Cost Analysis — Model Selection" table
 3. **Gemini Review skill** — `.claude/skills/gemini-review/gemini-review-protocol.md` → model assignments per review type
+4. **Gemini Direct skill** — `.claude/skills/gemini/SKILL.md` → model references and 2M context notes (verify `gemini-3.1-pro-preview` is still the 2M model)
 
 Identify:
 - **New models** not in our current list

@@ -31,6 +31,13 @@ Do not write any implementation code yourself. Execute this in two distinct phas
    - If domains have independent sub-tasks that can run in parallel (e.g., identical patterns applied to separate services), note the parallelism opportunity.
    - Present the cost analysis table alongside the domain plan. Default to the cheapest effective option.
 6. **Gemini Plan Audit** — Before presenting the plan to the user, run the Plan Audit review defined in `.claude/skills/gemini-review/gemini-review-protocol.md`. Use `gemini-3.1-pro-preview` via `ask-gemini` with the full domain plan + project conventions (`@CLAUDE.md @docs/architecture.md @docs/architecture/overview.mmd @avro/`). Incorporate any FAIL findings into the plan. Present the audit results alongside the plan so the user sees both Claude's plan and Gemini's assessment.
+   - **Optional epic cache:** If the epic will have 3+ Gemini reviews (Plan Audit + Boundary Guards + Idiom Checks), create an epic cache first for 90% cost reduction on subsequent reviews:
+     ```bash
+     uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+       --model gemini-2.5-flash --files CLAUDE.md docs/architecture.md avro/ \
+       --name "epic-{feature}" --ttl 7200
+     ```
+     Pass the cache name to Phase 2 domains for Boundary Guard / Idiom Check reuse. Delete the cache after Phase 3. If the epic has <3 reviews, use `ask-gemini` MCP for the Plan Audit (simpler, free).
 7. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
 
 ## PHASE 2: Sequential TDD Execution

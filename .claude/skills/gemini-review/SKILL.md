@@ -50,7 +50,15 @@ Refer to the review type definitions in `.claude/skills/gemini-review/gemini-rev
 | Bug Diagnostic | `gemini-2.5-flash-lite` | Quick sanity check |
 | General | `gemini-2.5-flash` | Balanced cost/capability |
 
-Call `ask-gemini` with the assembled context and the appropriate prompt template from the protocol document.
+**Dual strategy — choose the right tool:**
+
+- **Default (one-off reviews):** Call `ask-gemini` MCP with the assembled context. Free (OAuth), no API key needed.
+- **If an epic cache is active:** Call `gemini-api.py query --cache <cache-name>` instead of `ask-gemini`. Reuses cached context for 90% cost reduction.
+- **If review needs >1M context:** Call `gemini-api.py query --model gemini-3.1-pro-preview --files ...` (the only model with 2M context).
+
+See `.claude/skills/gemini-review/gemini-review-protocol.md` "Caching Strategy" for cache lifecycle details.
+
+Call the selected tool with the assembled context and the appropriate prompt template from the protocol document.
 
 **Prompt structure:**
 ```

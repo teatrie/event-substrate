@@ -62,3 +62,4 @@ chroma_data/
 # MCP server logs (chroma-mcp-server etc.)
 logs/
 package-lock.json
+uv.lock
