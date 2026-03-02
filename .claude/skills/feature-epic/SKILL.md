@@ -33,7 +33,7 @@ Do not write any implementation code yourself. Execute this in two distinct phas
 6. **Gemini Plan Audit** — Before presenting the plan to the user, run the Plan Audit review defined in `.claude/skills/gemini-review/gemini-review-protocol.md`. Use `gemini-3.1-pro-preview` via `ask-gemini` with the full domain plan + project conventions (`@CLAUDE.md @docs/architecture.md @docs/architecture/overview.mmd @avro/`). Incorporate any FAIL findings into the plan. Present the audit results alongside the plan so the user sees both Claude's plan and Gemini's assessment.
    - **Optional epic cache:** If the epic will have 3+ Gemini reviews (Plan Audit + Boundary Guards + Idiom Checks), create an epic cache first for 90% cost reduction on subsequent reviews:
      ```bash
-     uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+     uv run .claude/scripts/gemini-api.py cache create \
        --model gemini-2.5-flash --files CLAUDE.md docs/architecture.md avro/ \
        --name "epic-{feature}" --ttl 7200
      ```

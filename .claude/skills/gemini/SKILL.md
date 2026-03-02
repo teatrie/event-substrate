@@ -25,7 +25,7 @@ Requires `GEMINI_API_KEY` env var. Get a free key at [Google AI Studio](https://
 export GEMINI_API_KEY=your-key-here
 ```
 
-No pip install needed — `uv run --with google-genai` handles dependencies.
+No pip install needed — dependencies are declared inline via PEP 723 and resolved automatically by `uv run`.
 
 ## Parse Arguments
 
@@ -46,7 +46,7 @@ Parse `$ARGUMENTS` prefix to choose mode:
 3. **Execute:**
 
 ```bash
-uv run --with google-genai .claude/scripts/gemini-api.py query \
+uv run .claude/scripts/gemini-api.py query \
   --model MODEL \
   --files FILE... \
   --prompt "the user's question"
@@ -61,7 +61,7 @@ For multi-review epics where 3+ queries share the same context:
 
 ### Create cache
 ```bash
-uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+uv run .claude/scripts/gemini-api.py cache create \
   --model gemini-2.5-flash \
   --files CLAUDE.md docs/architecture.md avro/ \
   --name "epic-feature-name" \
@@ -70,7 +70,7 @@ uv run --with google-genai .claude/scripts/gemini-api.py cache create \
 
 ### Query against cache
 ```bash
-uv run --with google-genai .claude/scripts/gemini-api.py query \
+uv run .claude/scripts/gemini-api.py query \
   --model gemini-2.5-flash \
   --cache "cachedContents/abc123" \
   --prompt "Check domain boundaries for the new processor"
@@ -78,8 +78,8 @@ uv run --with google-genai .claude/scripts/gemini-api.py query \
 
 ### List/delete caches
 ```bash
-uv run --with google-genai .claude/scripts/gemini-api.py cache list
-uv run --with google-genai .claude/scripts/gemini-api.py cache delete cachedContents/abc123
+uv run .claude/scripts/gemini-api.py cache list
+uv run .claude/scripts/gemini-api.py cache delete cachedContents/abc123
 ```
 
 Cache is model-locked — if the epic mixes models, create separate caches per model.
@@ -89,7 +89,7 @@ Cache is model-locked — if the epic mixes models, create separate caches per m
 For full-codebase analysis exceeding 1M tokens. Only `gemini-3.1-pro-preview` supports 2M context.
 
 ```bash
-uv run --with google-genai .claude/scripts/gemini-api.py query \
+uv run .claude/scripts/gemini-api.py query \
   --model gemini-3.1-pro-preview \
   --files . \
   --prompt "the user's question"
