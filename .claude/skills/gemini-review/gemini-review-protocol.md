@@ -5,11 +5,13 @@ This protocol is referenced by `/gemini-review`, `/feature-epic`, `/tdd-execute`
 ## Role Definition
 
 Gemini acts as a **System Architect reviewer**, not a code reviewer. It checks:
+
 - **Structural compliance** — domain boundaries, topic ownership, schema consistency
 - **Drift detection** — conventions that have silently diverged across services
 - **Global consistency** — patterns that look correct locally but conflict globally
 
 It does NOT check:
+
 - Logic correctness (Claude's domain)
 - Test coverage (TDD protocol's domain)
 - Code style (linter's domain)
@@ -25,11 +27,13 @@ It does NOT check:
 **Model:** `gemini-3.1-pro-preview` (architectural reasoning needs thinking mode)
 
 **Context:**
-```
+
+```text
 @CLAUDE.md @docs/architecture.md @docs/architecture/overview.mmd @avro/ + plan text
 ```
 
 **Checklist:**
+
 - [ ] DDD boundary violations — does any domain write to another domain's topics?
 - [ ] Missing data contracts — are all inter-domain interfaces defined as Avro schemas?
 - [ ] Decomposition quality — are domains truly independent, or do hidden dependencies exist?
@@ -49,13 +53,15 @@ It does NOT check:
 **Model:** `gemini-2.5-flash` (fast structural scan)
 
 **Context:**
-```
+
+```text
 @CLAUDE.md @avro/ @{changed files from this domain}
 ```
 
 **Trigger condition:** Domain modifies files in 2+ of: `go-services/`, `flink_jobs/`, `avro/`, `kubernetes/`, `supabase/migrations/`. Single-service changes skip.
 
 **Checklist:**
+
 - [ ] Topic naming — new topics follow `public.{domain}.{entity}.{action}` convention
 - [ ] Topic ownership — no service writes to another domain's topics
 - [ ] Dependency drift — no direct DB reads across domain boundaries (only Kafka)
@@ -73,13 +79,15 @@ It does NOT check:
 **Model:** `gemini-2.5-flash`
 
 **Context:**
-```
+
+```text
 @{refactored files} + broader repo context for duplication scan
 ```
 
 **Trigger condition:** REFACTOR actually changed code (not a no-op). Skip if refactor was skipped.
 
 **Checklist:**
+
 - [ ] Language idioms — does the code follow Go/Python/TypeScript conventions for this codebase?
 - [ ] Codebase pattern consistency — does the new code match established patterns in the same service?
 - [ ] Cross-repo duplication — does similar logic already exist elsewhere that could be reused?
@@ -95,13 +103,15 @@ It does NOT check:
 **Model:** `gemini-2.5-flash-lite` (quick sanity check)
 
 **Context:**
-```
+
+```text
 Error/symptoms + relevant code files
 ```
 
 **Prompt:** Present the same error/symptoms WITHOUT Claude's diagnosis. Ask Gemini to independently identify the root cause.
 
 **Evaluation:**
+
 - **Agreement** (same root cause) → high confidence, proceed with fix
 - **Disagreement** (different root cause) → present both analyses to user, wait for direction
 
@@ -135,6 +145,7 @@ Two paths coexist for Gemini reviews:
 **Multi-review epics (3+ reviews sharing context):** Use `gemini-api.py` with explicit caching for 90% cost reduction:
 
 1. **Orchestrator creates cache at epic start:**
+
    ```bash
    uv run .claude/scripts/gemini-api.py cache create \
      --model gemini-2.5-flash \
@@ -143,6 +154,7 @@ Two paths coexist for Gemini reviews:
    ```
 
 2. **All review steps query against the cache:**
+
    ```bash
    uv run .claude/scripts/gemini-api.py query \
      --model gemini-2.5-flash \
@@ -151,6 +163,7 @@ Two paths coexist for Gemini reviews:
    ```
 
 3. **Orchestrator deletes cache when epic completes:**
+
    ```bash
    uv run .claude/scripts/gemini-api.py cache delete cachedContents/abc123
    ```

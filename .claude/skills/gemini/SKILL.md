@@ -52,14 +52,15 @@ uv run .claude/scripts/gemini-api.py query \
   --prompt "the user's question"
 ```
 
-4. **Validate** results per `/deep-research` Step 4 (spot-check file paths, names, claims).
-5. **Present** findings to user.
+1. **Validate** results per `/deep-research` Step 4 (spot-check file paths, names, claims).
+2. **Present** findings to user.
 
 ## Mode 2: Cached Session (cache: prefix)
 
 For multi-review epics where 3+ queries share the same context:
 
 ### Create cache
+
 ```bash
 uv run .claude/scripts/gemini-api.py cache create \
   --model gemini-2.5-flash \
@@ -69,6 +70,7 @@ uv run .claude/scripts/gemini-api.py cache create \
 ```
 
 ### Query against cache
+
 ```bash
 uv run .claude/scripts/gemini-api.py query \
   --model gemini-2.5-flash \
@@ -77,6 +79,7 @@ uv run .claude/scripts/gemini-api.py query \
 ```
 
 ### List/delete caches
+
 ```bash
 uv run .claude/scripts/gemini-api.py cache list
 uv run .claude/scripts/gemini-api.py cache delete cachedContents/abc123

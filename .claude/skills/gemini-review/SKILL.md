@@ -25,6 +25,7 @@ Parse `$ARGUMENTS` to determine the review mode:
 Assemble the `@` file references for `ask-gemini` based on review type. Always include project conventions:
 
 **Base context (all review types):**
+
 - `@CLAUDE.md` — project conventions, domain boundaries, deployment checklist
 - `@docs/architecture.md` — data flow and architecture overview
 
@@ -61,7 +62,8 @@ See `.claude/skills/gemini-review/gemini-review-protocol.md` "Caching Strategy" 
 Call the selected tool with the assembled context and the appropriate prompt template from the protocol document.
 
 **Prompt structure:**
-```
+
+```text
 You are a System Architect reviewer for an event-driven microservices platform.
 Your role is structural compliance, NOT line-level code review.
 
@@ -93,7 +95,7 @@ Flag any hallucinated references before presenting to the user.
 
 Format the output as a findings table:
 
-```
+```text
 ## Gemini Architectural Review — {Review Type}
 
 Model: {model used}

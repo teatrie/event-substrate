@@ -84,7 +84,7 @@ For ≤1M context, keep using `ask-gemini` MCP (OAuth, free) as the default path
 
 Structure the Gemini prompt for maximum utility:
 
-```
+```text
 @<path> [additional @paths if needed]
 
 <TASK>
@@ -126,6 +126,7 @@ Gemini can hallucinate file paths, function names, config values, and architectu
 5. **Reject fabricated content.** If spot-checks reveal >2 hallucinated references (files that don't exist, functions that aren't real), discard the entire response and either re-run with a more specific prompt or escalate to a higher-tier model.
 
 **Validation depth by task type:**
+
 - **Codebase scan** (topic lists, dependency maps) → verify all file paths, spot-check 50%+ of specific claims
 - **Architecture review** → verify all component names and data flow connections, flag reasoning as unverified
 - **Pattern search** → verify every reported match exists
@@ -145,7 +146,8 @@ If the selected model's output is:
 ## Examples
 
 ### Broad codebase scan
-```
+
+```text
 Model: gemini-2.5-flash (broad scan, straightforward analysis)
 
 @go-services/ @flink_jobs/
@@ -163,7 +165,8 @@ Table: | Service | Topic | Direction (produce/consume) | Convention OK? |
 ```
 
 ### Deep architectural analysis
-```
+
+```text
 Model: gemini-3.1-pro-preview (complex cross-file reasoning)
 
 @go-services/ @flink_jobs/ @supabase/migrations/ @avro/
@@ -183,7 +186,8 @@ Trace the complete data flow for the media upload saga from API gateway through 
 ```
 
 ### Algorithm / concurrency analysis
-```
+
+```text
 Model: gemini-3.1-pro-preview (complex logical reasoning)
 
 @go-services/consumer/internal/credits/balance.go

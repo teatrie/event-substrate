@@ -10,7 +10,7 @@ Query Gemini for the latest available models, then update memory and the `/deep-
 
 Ask Gemini for its own model roster:
 
-```
+```text
 Model: gemini-3.1-flash-preview (cheap, meta-question)
 Prompt: "List every Gemini model ID currently available for API use, including preview/experimental models. For each model, include: model ID string, context window size, key differentiator (speed, reasoning, cost, etc.), and whether it's GA, preview, or deprecated. Format as a markdown table sorted by capability (highest first)."
 ```
@@ -25,6 +25,7 @@ Compare the response against the current model list stored in:
 4. **Gemini Direct skill** — `.claude/skills/gemini/SKILL.md` → model references and 2M context notes (verify `gemini-3.1-pro-preview` is still the 2M model)
 
 Identify:
+
 - **New models** not in our current list
 - **Removed/deprecated models** still in our list
 - **Changed context windows or status** (e.g., preview → GA)

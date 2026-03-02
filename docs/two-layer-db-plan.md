@@ -38,7 +38,7 @@ OR (event_type = 'user.message' AND recipient_id = auth.uid()) -- DMs to me
 
 **Wide-column implication:** Requires three denormalized tables (one per access pattern):
 
-```
+```text
 notifications_by_user        — PK: (user_id), CK: (created_at DESC)
 broadcast_notifications      — PK: (time_bucket), CK: (created_at DESC)
 direct_messages_by_recipient — PK: (recipient_id), CK: (created_at DESC)
@@ -69,7 +69,7 @@ Wide-column stores have no `SUM()`. Options:
 
 Maps cleanly to wide-column:
 
-```
+```text
 media_files_by_user — PK: (user_id), CK: (file_path)
 ```
 
@@ -121,18 +121,20 @@ CREATE TABLE media_files (
 
 ### Model A: ScyllaDB as Durable Write Store
 
-```
+```text
 Flink → ScyllaDB (write-optimized, all tables)
 ScyllaDB CDC → Kafka → Materializer consumer → Postgres (serving)
 ```
 
 **Pros:**
+
 - Clean CQRS separation
 - ScyllaDB handles any write throughput
 - TTLs auto-expire old notifications (no Postgres vacuum)
 - Maps directly to Bigtable/DynamoDB in production
 
 **Cons:**
+
 - Extra hop (ScyllaDB → CDC → Kafka → Postgres)
 - More infrastructure to operate
 - Eventual consistency between write and read stores
@@ -141,19 +143,21 @@ ScyllaDB CDC → Kafka → Materializer consumer → Postgres (serving)
 
 ### Model B: Flink State + Postgres (with tuning)
 
-```
+```text
 Flink keyed state (credit balance, saga state) — in-process, zero latency
 Flink JDBC sink → Postgres (with batching + connection pooling)
 Postgres partitioning on user_notifications if write volume demands it
 ```
 
 **Pros:**
+
 - Simpler — fewer moving parts
 - Postgres with PgBouncer + time-based partitioning handles more than expected
 - No eventual consistency concerns
 - Lower operational overhead
 
 **Cons:**
+
 - Postgres becomes the bottleneck ceiling
 - At >10K writes/sec sustained, WAL and vacuum pressure becomes problematic
 
@@ -168,6 +172,7 @@ Postgres partitioning on user_notifications if write volume demands it
 **Regardless of model choice, adopt Flink keyed state for credit checks now.** This is a pure win — eliminates the Postgres roundtrip on the hottest path (`credit_check_processor.py`) without introducing new infrastructure.
 
 **Migrate to Model A when:**
+
 - `user_notifications` write volume exceeds partitioned Postgres capacity
 - Multi-region deployment is needed (ScyllaDB's masterless replication)
 - TTL-based auto-cleanup is preferred over Postgres vacuum
