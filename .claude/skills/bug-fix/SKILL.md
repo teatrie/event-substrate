@@ -59,6 +59,19 @@ You (the orchestrator) review the diagnostic report for soundness:
 
 **If the analysis is unsound**: escalate to a higher-tier diagnostic subagent with the previous report as context.
 
+#### Optional: Gemini Cross-Validation (Complex bugs only)
+
+For bugs classified as "Complex" (cross-service, race conditions, architectural
+regressions), run the Bug Diagnostic Cross-Validation defined in
+`.claude/skills/gemini-review/gemini-review-protocol.md`.
+
+Call `ask-gemini` with the same error/symptoms and relevant code files. Compare
+Gemini's root cause analysis with the diagnostic subagent's findings:
+- **Agreement** → high confidence, proceed
+- **Disagreement** → present both analyses to user, wait for direction
+
+Skip for: Simple and Medium tier bugs.
+
 ---
 
 ## PHASE 2: Fix Planning & Execution

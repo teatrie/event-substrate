@@ -17,6 +17,9 @@ Custom skills live in `.claude/skills/<name>/SKILL.md`:
 - `/bug-fix` — orchestrated diagnosis and fix with review gates
 - `/ship` — group dirty working tree into sequential PRs
 - `/pr` — push changes to a branch, open a PR, wait for CI, then merge
+- `/deep-research` — delegate deep research/analysis to Gemini (large context window, cost-optimized model selection)
+- `/check-gemini` — check for latest available Gemini models and update memory + skill files
+- `/gemini-review` — independent Gemini architectural review (domain boundaries, schema drift, structural compliance)
 - `/mermaid-to-svg` — convert `.mmd` to `.svg` via CLI
 
 ## Domain Boundaries (DDD)

@@ -33,6 +33,17 @@ touch .tdd-active
 git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
 ```
 
+#### Optional: Gemini Boundary Guard
+
+If this domain modifies files across 2+ service boundaries (`go-services/`, `flink_jobs/`,
+`avro/`, `kubernetes/`, `supabase/migrations/`), run the Boundary Guard review defined in
+`.claude/skills/gemini-review/gemini-review-protocol.md`.
+
+The orchestrator calls `ask-gemini` (subagents do NOT have MCP access). If findings
+include any FAIL results, address them before proceeding to REFACTOR.
+
+Skip for: single-service changes, config/YAML-only domains, docs.
+
 ### Step 4 — REFACTOR: Clean the code (guarded by checkpoint)
 
 **Refactor scope (priority order):**
@@ -59,6 +70,16 @@ git add -A && git commit -m "chore: GREEN checkpoint — <domain>"
 - Escalated agent gets **GREEN checkpoint code** + refactor criteria (NOT the failed diff)
 - Tests pass → run `task lint:fix` then `task lint` — if lint fails, that counts as a refactor failure (reset + next attempt)
 - All 3 fail → ship the GREEN code — working beats perfect
+
+#### Optional: Gemini Idiom Check
+
+If the REFACTOR phase changed code (not a no-op or skipped refactor), run the
+Idiom Check review defined in `.claude/skills/gemini-review/gemini-review-protocol.md`.
+
+The orchestrator calls `ask-gemini`. Findings are advisory — report to user but
+do not block the POST step unless a genuine duplication is found.
+
+Skip for: skipped refactors (shipping GREEN code), trivial domains.
 
 ### Step 5 — POST: Soft reset and domain commit
 
