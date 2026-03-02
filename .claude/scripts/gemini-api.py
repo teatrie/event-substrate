@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["google-genai"]
+# ///
 """Direct Gemini API CLI with context caching and 2M token support.
 
 Auth: GEMINI_API_KEY env var (from https://aistudio.google.com)
-Deps: google-genai (managed by uv run --with google-genai)
+Deps: google-genai (declared via PEP 723 inline metadata, resolved by uv)
 
 Usage:
-    uv run --with google-genai .claude/scripts/gemini-api.py query --model MODEL --prompt "..." [--files FILE...] [--cache NAME] [--system "..."]
-    uv run --with google-genai .claude/scripts/gemini-api.py pack --files FILE... [--repomix] [--output FILE]
-    uv run --with google-genai .claude/scripts/gemini-api.py cache create --model MODEL --files FILE... --name NAME [--ttl SECS] [--system "..."]
-    uv run --with google-genai .claude/scripts/gemini-api.py cache list
-    uv run --with google-genai .claude/scripts/gemini-api.py cache get NAME
-    uv run --with google-genai .claude/scripts/gemini-api.py cache extend NAME --ttl SECONDS
-    uv run --with google-genai .claude/scripts/gemini-api.py cache delete NAME
+    uv run .claude/scripts/gemini-api.py query --model MODEL --prompt "..." [--files FILE...] [--cache NAME] [--system "..."]
+    uv run .claude/scripts/gemini-api.py pack --files FILE... [--repomix] [--output FILE]
+    uv run .claude/scripts/gemini-api.py cache create --model MODEL --files FILE... --name NAME [--ttl SECS] [--system "..."]
+    uv run .claude/scripts/gemini-api.py cache list
+    uv run .claude/scripts/gemini-api.py cache get NAME
+    uv run .claude/scripts/gemini-api.py cache extend NAME --ttl SECONDS
+    uv run .claude/scripts/gemini-api.py cache delete NAME
 """
 
 import argparse
@@ -240,15 +244,17 @@ def cmd_cache_create(args):
 
     try:
         cache_config = {
-            "model": args.model,
-            "display_name": args.name,
+            "displayName": args.name,
             "contents": [types.Content(parts=[types.Part(text=packed)], role="user")],
             "ttl": f"{args.ttl}s",
         }
         if args.system:
-            cache_config["system_instruction"] = args.system
+            cache_config["systemInstruction"] = args.system
 
-        cache = client.caches.create(config=types.CreateCachedContentConfig(**cache_config))
+        cache = client.caches.create(
+            model=args.model,
+            config=types.CreateCachedContentConfig(**cache_config),
+        )
 
         print(f"cache_name: {cache.name}")
         print(f"model: {cache.model}")

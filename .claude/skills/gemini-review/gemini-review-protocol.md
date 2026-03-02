@@ -136,7 +136,7 @@ Two paths coexist for Gemini reviews:
 
 1. **Orchestrator creates cache at epic start:**
    ```bash
-   uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+   uv run .claude/scripts/gemini-api.py cache create \
      --model gemini-2.5-flash \
      --files CLAUDE.md docs/architecture.md docs/architecture/overview.mmd avro/ \
      --name "epic-{feature}" --ttl 7200
@@ -144,7 +144,7 @@ Two paths coexist for Gemini reviews:
 
 2. **All review steps query against the cache:**
    ```bash
-   uv run --with google-genai .claude/scripts/gemini-api.py query \
+   uv run .claude/scripts/gemini-api.py query \
      --model gemini-2.5-flash \
      --cache "cachedContents/abc123" \
      --prompt "Review type: Boundary Guard ..."
@@ -152,7 +152,7 @@ Two paths coexist for Gemini reviews:
 
 3. **Orchestrator deletes cache when epic completes:**
    ```bash
-   uv run --with google-genai .claude/scripts/gemini-api.py cache delete cachedContents/abc123
+   uv run .claude/scripts/gemini-api.py cache delete cachedContents/abc123
    ```
 
 **Cache is model-locked** — if the epic mixes models (e.g., `gemini-3.1-pro-preview` for Plan Audit, `gemini-2.5-flash` for Boundary Guard), create separate caches per model.
