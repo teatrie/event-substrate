@@ -30,7 +30,8 @@ Do not write any implementation code yourself. Execute this in two distinct phas
    - If 2+ domains can be routed to a cheaper model than the current session model, **recommend `/agent-team`** with per-domain model assignments.
    - If domains have independent sub-tasks that can run in parallel (e.g., identical patterns applied to separate services), note the parallelism opportunity.
    - Present the cost analysis table alongside the domain plan. Default to the cheapest effective option.
-6. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
+6. **Gemini Plan Audit** — Before presenting the plan to the user, run the Plan Audit review defined in `.claude/skills/gemini-review/gemini-review-protocol.md`. Use `gemini-3.1-pro-preview` via `ask-gemini` with the full domain plan + project conventions (`@CLAUDE.md @docs/architecture.md @docs/architecture/overview.mmd @avro/`). Incorporate any FAIL findings into the plan. Present the audit results alongside the plan so the user sees both Claude's plan and Gemini's assessment.
+7. **STOP AND ASK FOR APPROVAL.** Present the domains and contracts to me. Do not proceed to Phase 2 until I explicitly approve.
 
 ## PHASE 2: Sequential TDD Execution
 
