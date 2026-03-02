@@ -51,6 +51,35 @@ Before every `ask-gemini` call, assess the task and select the cheapest effectiv
 
 ---
 
+## 2M Mega-Context Mode
+
+If the research task requires >1M tokens of context (e.g., full repo analysis), use the API key path instead of `ask-gemini`:
+
+```bash
+uv run --with google-genai .claude/scripts/gemini-api.py query \
+  --model gemini-3.1-pro-preview \
+  --files . \
+  --prompt "your research question"
+```
+
+Only `gemini-3.1-pro-preview` supports 2M context (2,097,152 tokens). Requires `GEMINI_API_KEY` env var (free from [Google AI Studio](https://aistudio.google.com)).
+
+For multi-query research sessions, create a cache first to get 90% cost reduction on subsequent queries:
+
+```bash
+uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+  --model gemini-3.1-pro-preview --files . --name "research-session" --ttl 3600
+uv run --with google-genai .claude/scripts/gemini-api.py query \
+  --model gemini-3.1-pro-preview --cache "cachedContents/abc123" --prompt "question 1"
+uv run --with google-genai .claude/scripts/gemini-api.py query \
+  --model gemini-3.1-pro-preview --cache "cachedContents/abc123" --prompt "question 2"
+uv run --with google-genai .claude/scripts/gemini-api.py cache delete cachedContents/abc123
+```
+
+For ≤1M context, keep using `ask-gemini` MCP (OAuth, free) as the default path below.
+
+---
+
 ## Step 2: Construct the Prompt
 
 Structure the Gemini prompt for maximum utility:

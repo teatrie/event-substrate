@@ -126,16 +126,35 @@ When Gemini findings conflict with Claude's implementation decisions:
 
 Gemini is a second opinion, not an authority. Its structural checks catch real issues, but it lacks the incremental context that Claude's TDD loop provides.
 
-## Caching Opportunities (Future)
+## Caching Strategy
 
-Current state and future optimization paths:
+Two paths coexist for Gemini reviews:
 
-- **Gemini API** supports explicit `CachedContent` objects (REST/SDK) — not yet available in Gemini CLI v0.31.0
-- **Gemini CLI** has automatic within-session token caching (API key auth only, not OAuth)
-- **Neither works with `ask-gemini` MCP tool** — non-interactive, fresh session per call
+**One-off reviews:** Use `ask-gemini` MCP (OAuth, free). Default for single reviews outside an epic context.
 
-**Future optimization:** Build a thin API wrapper that creates a `CachedContent` object at epic start (containing `CLAUDE.md`, `architecture.md`, `avro/`), runs all reviews against it, deletes when done. Would cut per-review cost significantly for multi-review epics.
+**Multi-review epics (3+ reviews sharing context):** Use `gemini-api.py` with explicit caching for 90% cost reduction:
 
-**Pragmatic workaround now:** Scope `@` references tightly per review type (e.g., `@avro/public/media/` not `@avro/`) to minimize redundant context.
+1. **Orchestrator creates cache at epic start:**
+   ```bash
+   uv run --with google-genai .claude/scripts/gemini-api.py cache create \
+     --model gemini-2.5-flash \
+     --files CLAUDE.md docs/architecture.md docs/architecture/overview.mmd avro/ \
+     --name "epic-{feature}" --ttl 7200
+   ```
 
-**Track:** When Gemini CLI adds `/cache` command or when review costs become material, revisit.
+2. **All review steps query against the cache:**
+   ```bash
+   uv run --with google-genai .claude/scripts/gemini-api.py query \
+     --model gemini-2.5-flash \
+     --cache "cachedContents/abc123" \
+     --prompt "Review type: Boundary Guard ..."
+   ```
+
+3. **Orchestrator deletes cache when epic completes:**
+   ```bash
+   uv run --with google-genai .claude/scripts/gemini-api.py cache delete cachedContents/abc123
+   ```
+
+**Cache is model-locked** — if the epic mixes models (e.g., `gemini-3.1-pro-preview` for Plan Audit, `gemini-2.5-flash` for Boundary Guard), create separate caches per model.
+
+**>1M context reviews:** Use `gemini-api.py query --model gemini-3.1-pro-preview` (the only model with 2M context). The `ask-gemini` MCP (OAuth) caps at 1M.

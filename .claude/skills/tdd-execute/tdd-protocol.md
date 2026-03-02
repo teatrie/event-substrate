@@ -39,8 +39,9 @@ If this domain modifies files across 2+ service boundaries (`go-services/`, `fli
 `avro/`, `kubernetes/`, `supabase/migrations/`), run the Boundary Guard review defined in
 `.claude/skills/gemini-review/gemini-review-protocol.md`.
 
-The orchestrator calls `ask-gemini` (subagents do NOT have MCP access). If findings
-include any FAIL results, address them before proceeding to REFACTOR.
+The orchestrator calls `ask-gemini` MCP (subagents do NOT have MCP access). If an epic
+cache exists, use `gemini-api.py query --cache <name>` instead for cached context reuse.
+If findings include any FAIL results, address them before proceeding to REFACTOR.
 
 Skip for: single-service changes, config/YAML-only domains, docs.
 
@@ -76,8 +77,9 @@ Skip for: single-service changes, config/YAML-only domains, docs.
 If the REFACTOR phase changed code (not a no-op or skipped refactor), run the
 Idiom Check review defined in `.claude/skills/gemini-review/gemini-review-protocol.md`.
 
-The orchestrator calls `ask-gemini`. Findings are advisory — report to user but
-do not block the POST step unless a genuine duplication is found.
+The orchestrator calls `ask-gemini` MCP (or `gemini-api.py query --cache <name>` if an
+epic cache exists). Findings are advisory — report to user but do not block the POST
+step unless a genuine duplication is found.
 
 Skip for: skipped refactors (shipping GREEN code), trivial domains.
 

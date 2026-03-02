@@ -20,6 +20,7 @@ Custom skills live in `.claude/skills/<name>/SKILL.md`:
 - `/deep-research` — delegate deep research/analysis to Gemini (large context window, cost-optimized model selection)
 - `/check-gemini` — check for latest available Gemini models and update memory + skill files
 - `/gemini-review` — independent Gemini architectural review (domain boundaries, schema drift, structural compliance)
+- `/gemini` — direct Gemini API with 2M context + caching (complements ask-gemini MCP for mega-context)
 - `/mermaid-to-svg` — convert `.mmd` to `.svg` via CLI
 
 ## Domain Boundaries (DDD)
