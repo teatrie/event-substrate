@@ -67,6 +67,7 @@ regressions), run the Bug Diagnostic Cross-Validation defined in
 
 Call `ask-gemini` with the same error/symptoms and relevant code files. Compare
 Gemini's root cause analysis with the diagnostic subagent's findings:
+
 - **Agreement** → high confidence, proceed
 - **Disagreement** → present both analyses to user, wait for direction
 
