@@ -1,0 +1,15 @@
+# CODEOWNERS — event-substrate
+# Each line maps a file pattern to one or more owners.
+# Order matters: later rules override earlier ones.
+
+# Default: all paths owned by sole contributor
+* @teatrie
+
+# Domain-specific ownership (for future expansion)
+# /go-services/   @teatrie
+# /flink_jobs/    @teatrie
+# /pyspark_apps/  @teatrie
+# /frontend/      @teatrie
+# /supabase/      @teatrie
+# /avro/          @teatrie
+# /charts/        @teatrie

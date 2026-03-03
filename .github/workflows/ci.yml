@@ -393,3 +393,37 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}/pyflink:${{ github.sha }}
             ghcr.io/${{ github.repository }}/pyflink:latest
+
+  # ---------------------------------------------------------------------------
+  # CI Gate (aggregates all conditional jobs for branch protection)
+  # ---------------------------------------------------------------------------
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs:
+      - test-go
+      - test-spark
+      - lint-helm
+      - lint-go
+      - lint-python-flink
+      - lint-python-spark
+      - lint-frontend
+      - lint-sql
+      - lint-yaml
+      - lint-k8s
+      - lint-markdown
+      - lint-mermaid
+      - check-types-python-flink
+      - check-types-python-spark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::CI gate failed — upstream job result: $r"
+              exit 1
+            fi
+          done
+          echo "All CI jobs passed or were skipped"
