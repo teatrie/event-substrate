@@ -91,7 +91,7 @@ PR 3: ...
 
 **Do NOT create any branches or PRs until the user approves.**
 
-**If the user selects "proceed and merge":** after creating each PR, immediately merge it with `gh pr merge <number> --merge --delete-branch`, then pull `origin/main` before branching for the next PR. This collapses the stacked-PR complexity — each PR branches from and merges to `main` in sequence.
+**If the user selects "proceed and merge":** after creating each PR, wait for CI to pass with `gh pr checks <number> --watch --fail-fast`. If CI passes, merge with `gh pr merge <number> --merge --delete-branch`, then pull `origin/main` before branching for the next PR. **If CI fails on any PR, stop the entire sequence** — do not merge subsequent PRs. Report the failure and let the user inspect the logs. This collapses the stacked-PR complexity — each PR branches from and merges to `main` in sequence.
 
 ---
 
