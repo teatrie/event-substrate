@@ -11,4 +11,3 @@ ignores:
   - ".pytest_cache/**"
   - ".claude/projects/**"
   - "**/AGENT.md"         # Symlinks to CLAUDE.md — don't lint twice
-  - ".antigravity/**"     # Internal rules, not project docs
